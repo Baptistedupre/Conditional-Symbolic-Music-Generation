@@ -16,7 +16,7 @@ class Linear(nn.Module):
 
 
 class LSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, bias, dropout): # noqa 501
+    def __init__(self, input_size, hidden_size, num_layers, dropout=0): # noqa 501
         super(LSTM, self).__init__()
 
         self.lstm = nn.LSTM(
@@ -24,7 +24,6 @@ class LSTM(nn.Module):
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
-            bias=bias,
             dropout=dropout,
             bidirectional=False)
 
@@ -33,7 +32,7 @@ class LSTM(nn.Module):
 
 
 class BiLSTM(nn.Module):
-    def __init__(self, input_size, hidden_size, num_layers, bias, batch_first, dropout): # noqa 501
+    def __init__(self, input_size, hidden_size, num_layers, dropout=0): # noqa 501
         super(BiLSTM, self).__init__()
 
         self.lstm = nn.LSTM(
@@ -41,7 +40,6 @@ class BiLSTM(nn.Module):
             input_size=input_size,
             hidden_size=hidden_size,
             num_layers=num_layers,
-            bias=bias,
             dropout=dropout,
             bidirectional=True)
 
