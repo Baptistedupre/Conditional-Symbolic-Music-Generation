@@ -55,18 +55,21 @@ class HierarchicalDecoder(nn.Module):
             nn.Tanh()
         )
 
-        self.conductor = nn.Sequential(
-            LSTM(conductor_hidden_size, conductor_hidden_size, conductor_num_layers), # noqa 501
-            Linear(conductor_hidden_size, conductor_output_size)
-        )
+        self.conductor = LSTM(conductor_hidden_size,
+                              conductor_hidden_size,
+                              conductor_num_layers), # noqa 501
 
         self.conductor_fc = nn.Sequential(
-            Linear(conductor_output_size, conductor_output_size), # noqa 501
+            Linear(conductor_hidden_size, conductor_output_size),
+            Linear(conductor_output_size, conductor_output_size),
             nn.Tanh()
         )
 
-        self.decoder = nn.Sequential(
-            LSTM(conductor_output_size + output_size, decoder_hidden_size, decoder_num_layers), # noqa 501
+        self.decoder = LSTM(conductor_output_size + output_size,
+                            decoder_hidden_size,
+                            decoder_num_layers), # noqa 501
+
+        self.decoder_fc = nn.Sequential(
             Linear(decoder_hidden_size, output_size),
             nn.Softmax(dim=-1)
         )
@@ -84,6 +87,7 @@ class HierarchicalDecoder(nn.Module):
             use_teacher_forcing = eps < self.teacher_forcing_ratio
 
         for sequence_idx in range(self.num_segments):
+            print(state)
             embedding, state = self.conductor(z, state) # (batch_size, conductor_output_size) # noqa 501
             embedding = self.conductor_fc(embedding) # (batch_size, conductor_output_size) # noqa 501
 
@@ -92,12 +96,14 @@ class HierarchicalDecoder(nn.Module):
                 idx = range(sequence_idx * self.segment_length, (sequence_idx + 1) * self.segment_length) # noqa 501
                 decoder_input = torch.cat(target[:, idx, :], embedding, dim=-1)
                 prev_note, state = self.decoder(decoder_input, state_dec)
+                prev_note = self.decoder_fc(prev_note)
                 out[:, idx, :] = prev_note
                 prev_note = prev_note.unsqueeze(1)
             else:
                 for note_idx in range(self.segment_length):
                     decoder_input = torch.cat([prev_note, embedding], dim=-1) # noqa 501
                     prev_note, state_dec = self.decoder(decoder_input, state_dec) # noqa 501
+                    prev_note = self.decoder_fc(prev_note)
 
                     idx = sequence_idx * self.segment_length + note_idx
                     out[:, idx, :] = prev_note.squeeze(1)
@@ -113,3 +119,13 @@ class HierarchicalDecoder(nn.Module):
     def init_hidden_decoder(self, batch_size):
         return (torch.zeros(batch_size, self.decoder_num_layers, self.decoder_hidden_size), # noqa 501
                 torch.zeros(batch_size, self.decoder_num_layers, self.decoder_hidden_size)) # noqa 501
+
+
+if __name__ == '__main__':
+    encoder = Encoder(27)
+    decoder = HierarchicalDecoder(512, 27)
+    seq_length = 64
+    batch_size = 3
+    input = torch.rand(batch_size, seq_length, 27)
+    mu, sigma, z = encoder(input)
+    out = decoder(z, input)
