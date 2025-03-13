@@ -1,0 +1,4 @@
+data/*.cls
+data/lmd_matched/
+*.ipynb
+*.pyc
