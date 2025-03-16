@@ -22,7 +22,7 @@ import note_seq
 from note_seq import chords_lib
 from note_seq import sequences_lib
 import numpy as np
-import tensorflow as tf
+import torch
 
 from note_seq import Melody
 from note_seq import PolyphonicMelodyError
@@ -196,19 +196,14 @@ class NoteSequenceAugmenter(object):
         delete_out_of_range_notes=True)
 
   def tf_augment(self, note_sequence_scalar):
-    """TF op that augments the NoteSequence."""
+    """PyTorch op that augments the NoteSequence."""
     def _augment_str(note_sequence_str):
       note_sequence = note_seq.NoteSequence.FromString(
           note_sequence_str.numpy())
       augmented_ns = self.augment(note_sequence)
-      return [augmented_ns.SerializeToString()]
+      return torch.tensor([augmented_ns.SerializeToString()], dtype=torch.string)
 
-    augmented_note_sequence_scalar = tf.py_function(
-        _augment_str,
-        inp=[note_sequence_scalar],
-        Tout=tf.string,
-        name='augment')
-    augmented_note_sequence_scalar.set_shape(())
+    augmented_note_sequence_scalar = torch.jit.script(_augment_str)(note_sequence_scalar)
     return augmented_note_sequence_scalar
 
 

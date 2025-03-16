@@ -4,6 +4,7 @@ import numpy as np
 import pretty_midi
 import warnings
 from joblib import Parallel, delayed
+import json
 
 
 def get_genres(path):
@@ -169,7 +170,7 @@ def process_row(row, genre_dict, num_classes):
 def save_matching_csv(genre_path, midi_folder, output_path):
     """
     Creates a DataFrame with columns ["path", "genre", "one_hot_genre", "features"] by matching genres to MIDI files,
-    and saves it as a CSV file.
+    and saves it as a JSON file.
     
     Parameters
     ----------
@@ -198,15 +199,14 @@ def save_matching_csv(genre_path, midi_folder, output_path):
     
     # Drop rows with None features
     processed_df = processed_df.dropna(subset=['Features'])
-
-    print(processed_df.head())
     
-    processed_df.to_csv(output_path, index=False)
+    # Save with better array representation
+    processed_df.to_json(output_path, orient='records')
 
 
 if __name__ == "__main__":
     save_matching_csv(
         'data/msd_tagtraum_cd1.cls', 
         'data/lmd_matched/lmd_matched', 
-        'data/matching.csv'
+        'data/matching.json'
     )
