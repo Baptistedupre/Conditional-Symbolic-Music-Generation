@@ -1,125 +1,107 @@
 import sys
 import os
-import argparse
+import shutil  # For unzipping
 from pathlib import Path
 import s3fs
 from preprocess import save_matching_csv
 from dataloader import create_preprocessed_dataset
 
 
-def check_data_requirements(local: bool, fs=None):
-    """Check if required data files and folders exist."""
-    if local:
-        requirements = {
-            "midi_folder": Path("data/lmd_matched/lmd_matched"),
-            "genre_file": Path("data/msd_tagtraum_cd1.cls"),
-            "matching_file": Path("data/matching.json"),
-            "output_folder": Path("data/songs"),
-        }
-        if not requirements["midi_folder"].exists():
-            print(
-                "ERROR: MIDI folder not found. Please download the LMD matched dataset and extract it to data/lmd_matched/"
-            )
-            print("Download from: https://colinraffel.com/projects/lmd/")
-            return False
-        if not requirements["genre_file"].exists():
-            print(
-                "ERROR: Genre file not found. Please download the genre dataset and place it in data/"
-            )
-            print(
-                "Download from: https://www.tagtraum.com/msd_genre_datasets.html (CD1 zip file)"
-            )
-            return False
-        Path("data").mkdir(exist_ok=True)
-        requirements["output_folder"].mkdir(exist_ok=True)
-        return requirements
-    else:
-        base = "s3://lstepien/Conditional_Music_Generation/data/"
-        requirements = {
-            "midi_folder": base + "lmd_matched",
-            "genre_file": base + "msd_tagtraum_cd1.cls",
-            "matching_file": base + "matching.json",
-            "output_folder": base + "songs",
-        }
-        if not fs.exists(requirements["midi_folder"]):
-            print("ERROR: Remote MIDI folder not found. Please check S3 storage.")
-            return False
-        if not fs.exists(requirements["genre_file"]):
-            print("ERROR: Remote Genre file not found. Please check S3 storage.")
-            return False
-        if not fs.exists(requirements["output_folder"]):
-            fs.mkdir(requirements["output_folder"])
-        return requirements
-
-
-def count_processed_files(songs_dir, local: bool, fs=None):
-    """Count number of processed MIDI files."""
-    if local:
-        return len(list(Path(songs_dir).glob("*.pt")))
-    else:
-        return len(fs.glob(songs_dir + "/*.pt"))
-
-
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "-local", action="store_true", help="Run in local mode (assumes local data)"
+    fs = s3fs.S3FileSystem(
+        client_kwargs={"endpoint_url": "https://minio.lab.sspcloud.fr"}
     )
-    args = parser.parse_args()
+    local_matching = "data/matching.json"
+    remote_matching = "s3://lstepien/Conditional_Music_Generation/data/matching.json"
+    songs_path = Path("data/songs")
+    remote_songs_zip = "s3://lstepien/Conditional_Music_Generation/data/songs.zip"
 
-    if not args.local:
-        fs = s3fs.S3FileSystem(
-            client_kwargs={"endpoint_url": "https://minio.lab.sspcloud.fr"}
+    # Attempt to download matching.json if not present locally.
+    if not Path(local_matching).exists():
+        if fs.exists(remote_matching):
+            print("Found remote matching.json. Downloading...")
+            os.makedirs("data", exist_ok=True)
+            fs.get(remote_matching, local_matching)
+        else:
+            print("Remote matching.json not found. It will be recreated locally.")
+
+    # Attempt to download songs.zip if processed files are missing.
+    processed_files = list(songs_path.glob("*.pt")) if songs_path.exists() else []
+    if not processed_files:
+        if fs.exists(remote_songs_zip):
+            print("Found remote songs.zip. Downloading and unzipping...")
+            local_zip = "data/songs.zip"
+            os.makedirs("data", exist_ok=True)
+            fs.get(remote_songs_zip, local_zip)
+            shutil.unpack_archive(local_zip, "data/")
+            os.remove(local_zip)
+        else:
+            print(
+                "Remote songs.zip not found. Processed files will be recreated locally."
+            )
+
+    # Check if both matching.json and processed songs are available.
+    processed_files = list(songs_path.glob("*.pt")) if songs_path.exists() else []
+    if Path(local_matching).exists() and processed_files:
+        print(
+            "Local matching.json and processed songs are available. Data is ready for MIDIDataset."
         )
-    else:
-        fs = None
+        return
 
-    print("Checking data requirements...")
-    reqs = check_data_requirements(args.local, fs)
+    # Proceed with local preprocessing.
+    print("Checking local data requirements...")
+    reqs = check_data_requirements()
     if not reqs:
         sys.exit(1)
 
-    # Use matching.json path based on mode.
-    matching_path = reqs["matching_file"] if not args.local else "data/matching.json"
-
-    if args.local:
-        if not Path(matching_path).exists() or Path(matching_path).stat().st_size == 0:
-            print("Creating matching.json...")
-            save_matching_csv(
-                "data/msd_tagtraum_cd1.cls",
-                "data/lmd_matched/lmd_matched",
-                matching_path,
-            )
-        else:
-            print("matching.json already exists, skipping creation")
+    if not Path(local_matching).exists() or Path(local_matching).stat().st_size == 0:
+        print("Creating matching.json locally...")
+        save_matching_csv(
+            "data/msd_tagtraum_cd1.cls", "data/lmd_matched/lmd_matched", local_matching
+        )
     else:
-        if not fs.exists(matching_path) or fs.info(matching_path)["Size"] == 0:
-            print("Creating matching.json on S3...")
-            local_temp = "temp_matching.json"
-            save_matching_csv(
-                "s3://lstepien/Conditional_Music_Generation/data/msd_tagtraum_cd1.cls",
-                "s3://lstepien/Conditional_Music_Generation/data/lmd_matched",
-                local_temp,
-            )
-            fs.put(local_temp, matching_path)
-            os.remove(local_temp)
-        else:
-            print("matching.json already exists on S3, skipping creation")
+        print("matching.json is available.")
 
-    # Check processed files count.
-    songs_path = "data/songs" if args.local else reqs["output_folder"]
-    n_processed = count_processed_files(songs_path, args.local, fs)
-    if n_processed > 0:
-        print(f"Found {n_processed} already processed files.")
+    processed_files = list(songs_path.glob("*.pt"))
+    if processed_files:
+        print(f"Found {len(processed_files)} processed files.")
         user_input = input("Do you want to process remaining files? [y/N]: ")
         if user_input.lower() != "y":
             print("Skipping preprocessing")
             return
+    else:
+        print("No processed files found. Proceeding with preprocessing...")
 
     print("Processing MIDI files...")
-    create_preprocessed_dataset(matching_path)
-    final_count = count_processed_files(songs_path, args.local, fs)
+    create_preprocessed_dataset(local_matching)
+    final_count = len(list(songs_path.glob("*.pt")))
     print(f"Preprocessing complete. {final_count} files processed in total.")
+
+
+# Include check_data_requirements unchanged
+def check_data_requirements():
+    requirements = {
+        "midi_folder": Path("data/lmd_matched/lmd_matched"),
+        "genre_file": Path("data/msd_tagtraum_cd1.cls"),
+        "output_folder": Path("data/songs"),
+    }
+    if not requirements["midi_folder"].exists():
+        print(
+            "ERROR: MIDI folder not found. Please download the LMD matched dataset and extract it to data/lmd_matched/"
+        )
+        print("Download from: https://colinraffel.com/projects/lmd/")
+        return False
+    if not requirements["genre_file"].exists():
+        print(
+            "ERROR: Genre file not found. Please download the genre dataset and place it in data/"
+        )
+        print(
+            "Download from: https://www.tagtraum.com/msd_genre_datasets.html (CD1 zip file)"
+        )
+        return False
+    os.makedirs("data", exist_ok=True)
+    requirements["output_folder"].mkdir(exist_ok=True)
+    return requirements
 
 
 if __name__ == "__main__":

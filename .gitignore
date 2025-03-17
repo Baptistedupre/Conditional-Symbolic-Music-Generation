@@ -1,6 +1,3 @@
-data/*.cls
-data/*.csv
-data/lmd_matched/
-data/songs/
+data/
 *.ipynb
 *.pyc

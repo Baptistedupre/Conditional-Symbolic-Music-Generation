@@ -3,6 +3,12 @@ PyTorch implementation of Magenta's MusicVAE
 
 ## Creating the Data for MIDIDataset
 
+Try running
+```bash
+python data_main.py
+```
+If it works the dataset necessary to have MIDIDataset working was downloaded, otherwise you will need to process the data locally following the next instructions.
+
 ### 1. Download and Extract Data
 
 Before using the `MIDIDataset` class, you'll need to download and properly extract two main datasets:
