@@ -1,10 +1,12 @@
+import os
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '..'))
 import note_seq
 import torch
 from torch.utils.data import Dataset, DataLoader
 from typing import Literal, Tuple
 import pandas as pd
 from joblib import Parallel, delayed
-import os
 import random
 
 from utils.melody_converter import melody_2bar_converter
