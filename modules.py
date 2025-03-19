@@ -5,17 +5,22 @@ from layers import Linear, LSTM, BiLSTM
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_size, latent_dim,
+    def __init__(self, input_size, latent_dim, 
+                 features_size=13,
                  hidden_size=2048,
                  num_layers=2):
         super(Encoder, self).__init__()
 
-        self.bilstm_layer = BiLSTM(input_size, hidden_size, num_layers)
+        self.bilstm_layer = BiLSTM(input_size + features_size, hidden_size, num_layers) # noqa 501
         self.fc_mu = Linear(hidden_size * 2, latent_dim)
         self.fc_sigma = Linear(hidden_size * 2, latent_dim)
         self.relu = nn.ReLU()
 
-    def forward(self, x):
+    def forward(self, x, features=None):
+        if features is not None:
+            features = features.unsqueeze(1).repeat(1, x.size(1), 1)
+            x = torch.cat([x, features], dim=-1)
+
         x, _ = self.bilstm_layer(x)
         x = x[:, -1, :]
 
@@ -149,7 +154,6 @@ class HierarchicalDecoder(nn.Module):
             use_teacher_forcing = eps < self.teacher_forcing_ratio
 
         for sequence_idx in range(self.num_segments):
-            print(state)
             embedding, state = self.conductor(z, state) # (batch_size, conductor_output_size) # noqa 501
             embedding = self.conductor_fc(embedding) # (batch_size, conductor_output_size) # noqa 501
 
@@ -184,11 +188,13 @@ class HierarchicalDecoder(nn.Module):
 
 
 if __name__ == '__main__':
-    encoder = Encoder(512, 90)
-    decoder = CategoricalDecoder(512, 90)
+    encoder = Encoder(90, 512)
+    decoder = CategoricalDecoder(90, 512)
     seq_length = 32
     batch_size = 3
     input = torch.rand(batch_size, seq_length, 90)
-    mu, sigma, z = encoder(input)
+    features = torch.rand(batch_size, 13)
+    mu, sigma, z = encoder(input, features)
     out = decoder(z)
     print(out)
+

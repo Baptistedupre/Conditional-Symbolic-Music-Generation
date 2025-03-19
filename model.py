@@ -36,6 +36,7 @@ class MusicVAE(nn.Module):
         return out, mu, sigma, z
 
 
+
 if __name__ == '__main__':
     model = MusicVAE(input_size=90,
                      output_size=90,
