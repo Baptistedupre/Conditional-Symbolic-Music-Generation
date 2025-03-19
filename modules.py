@@ -28,6 +28,68 @@ class Encoder(nn.Module):
         return mu, sigma, z
 
 
+class CategoricalDecoder(nn.Module):
+    def __init__(self, latent_dim, output_size,
+                 projection_hidden_size=512,
+                 decoder_hidden_size=1024,
+                 decoder_num_layers=2,
+                 num_layers=2,
+                 segment_length=32,
+                 teacher_forcing_ratio=0.5):
+        super(CategoricalDecoder, self).__init__()
+        self.num_layers = num_layers
+        self.decoder_num_layers = decoder_num_layers
+        self.projection_hidden_size = projection_hidden_size
+        self.decoder_hidden_size = decoder_hidden_size
+        self.output_size = output_size
+        self.segment_length = segment_length
+        self.teacher_forcing_ratio = teacher_forcing_ratio
+
+        self.projection_layer = nn.Sequential(
+            Linear(latent_dim, projection_hidden_size),
+            nn.Tanh()
+        )
+
+        self.decoder = LSTM(projection_hidden_size + output_size,
+                            decoder_hidden_size,
+                            decoder_num_layers)
+
+        self.decoder_fc = nn.Sequential(
+            Linear(decoder_hidden_size, output_size),
+            nn.Softmax(dim=-1)
+        )
+
+    def forward(self, z, target=None):
+        batch_size = z.size(0)
+
+        z = self.projection_layer(z)  # (batch_size, latent_dim)
+        z = z.unsqueeze(1).repeat(1, self.decoder_num_layers, 1) # (batch_size, conductor_num_layers, conductor_hidden_size) # noqa 501
+        prev_note, out, state_dec = torch.zeros(batch_size, self.decoder_num_layers, self.output_size), torch.zeros(batch_size, self.segment_length, self.output_size), self.init_hidden_decoder(batch_size) # noqa 501
+
+        if target is not None:
+            use_teacher_forcing = self.use_teacher_forcing()
+
+        if target is not None and use_teacher_forcing:
+            print(target.shape, z.shape)
+            decoder_input = torch.cat([target, z], dim=-1)
+            out, _ = self.decoder(decoder_input, state_dec)
+            out = self.decoder_fc(out)
+        else:
+            for note_idx in range(self.segment_length):
+                decoder_input = torch.cat([prev_note, z], dim=-1)
+                prev_note, state_dec = self.decoder(decoder_input, state_dec)
+                prev_note = self.decoder_fc(prev_note)
+                out[:, note_idx, :] = prev_note[:, -1, :]
+        return out
+
+    def use_teacher_forcing(self):
+        return torch.rand(1).item() < self.teacher_forcing_ratio
+
+    def init_hidden_decoder(self, batch_size):
+        return (torch.zeros(self.decoder_num_layers, batch_size, self.decoder_hidden_size), # noqa 501
+                torch.zeros(self.decoder_num_layers, batch_size, self.decoder_hidden_size)) # noqa 501
+
+
 class HierarchicalDecoder(nn.Module):
     def __init__(self, latent_dim, output_size,
                  conductor_hidden_size=1024,
@@ -57,7 +119,7 @@ class HierarchicalDecoder(nn.Module):
 
         self.conductor = LSTM(conductor_hidden_size,
                               conductor_hidden_size,
-                              conductor_num_layers), # noqa 501
+                              conductor_num_layers) # noqa 501
 
         self.conductor_fc = nn.Sequential(
             Linear(conductor_hidden_size, conductor_output_size),
@@ -67,7 +129,7 @@ class HierarchicalDecoder(nn.Module):
 
         self.decoder = LSTM(conductor_output_size + output_size,
                             decoder_hidden_size,
-                            decoder_num_layers), # noqa 501
+                            decoder_num_layers) # noqa 501
 
         self.decoder_fc = nn.Sequential(
             Linear(decoder_hidden_size, output_size),
@@ -79,7 +141,7 @@ class HierarchicalDecoder(nn.Module):
 
         z = self.projection_layer(z)  # (batch_size, latent_dim)
         z = z.unsqueeze(1).repeat(1, self.conductor_num_layers, 1) # (batch_size, conductor_num_layers, conductor_hidden_size) # noqa 501
-        prev_note, out = torch.zeros(batch_size, 1, self.output_size), torch.zeros(batch_size, self.max_sequence_length, self.output_size) # noqa 501
+        prev_note, out = torch.zeros(batch_size, self.decoder_num_layers, self.output_size), torch.zeros(batch_size, self.max_sequence_length, self.output_size) # noqa 501
         state, state_dec = self.init_hidden_conductor(batch_size), self.init_hidden_decoder(batch_size) # noqa 501
 
         if target is not None:
@@ -122,10 +184,11 @@ class HierarchicalDecoder(nn.Module):
 
 
 if __name__ == '__main__':
-    encoder = Encoder(27)
-    decoder = HierarchicalDecoder(512, 27)
-    seq_length = 64
+    encoder = Encoder(90)
+    decoder = CategoricalDecoder(512, 90)
+    seq_length = 32
     batch_size = 3
-    input = torch.rand(batch_size, seq_length, 27)
+    input = torch.rand(batch_size, seq_length, 90)
     mu, sigma, z = encoder(input)
-    out = decoder(z, input)
+    out = decoder(z)
+
