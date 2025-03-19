@@ -5,9 +5,8 @@ from layers import Linear, LSTM, BiLSTM
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_size,
+    def __init__(self, input_size, latent_dim,
                  hidden_size=2048,
-                 latent_dim=512,
                  num_layers=2):
         super(Encoder, self).__init__()
 
@@ -23,21 +22,21 @@ class Encoder(nn.Module):
         mu = self.fc_mu(x)
         sigma = torch.log(torch.exp(self.fc_sigma(x)) + 1)
 
-        z = mu + sigma * torch.randn_like(sigma)
+        with torch.no_grad():
+            epsilon = torch.randn_like(sigma)
+        z = mu + sigma * epsilon
 
         return mu, sigma, z
 
 
 class CategoricalDecoder(nn.Module):
-    def __init__(self, latent_dim, output_size,
+    def __init__(self, output_size, latent_dim,
                  projection_hidden_size=512,
                  decoder_hidden_size=1024,
                  decoder_num_layers=2,
-                 num_layers=2,
                  segment_length=32,
                  teacher_forcing_ratio=0.5):
         super(CategoricalDecoder, self).__init__()
-        self.num_layers = num_layers
         self.decoder_num_layers = decoder_num_layers
         self.projection_hidden_size = projection_hidden_size
         self.decoder_hidden_size = decoder_hidden_size
@@ -62,8 +61,8 @@ class CategoricalDecoder(nn.Module):
     def forward(self, z, target=None):
         batch_size = z.size(0)
 
-        z = self.projection_layer(z)  # (batch_size, latent_dim)
-        z = z.unsqueeze(1).repeat(1, self.decoder_num_layers, 1) # (batch_size, conductor_num_layers, conductor_hidden_size) # noqa 501
+        z = self.projection_layer(z)
+        z = z.unsqueeze(1).repeat(1, self.decoder_num_layers, 1)
         prev_note, out, state_dec = torch.zeros(batch_size, self.decoder_num_layers, self.output_size), torch.zeros(batch_size, self.segment_length, self.output_size), self.init_hidden_decoder(batch_size) # noqa 501
 
         if target is not None:
@@ -184,11 +183,11 @@ class HierarchicalDecoder(nn.Module):
 
 
 if __name__ == '__main__':
-    encoder = Encoder(90)
+    encoder = Encoder(512, 90)
     decoder = CategoricalDecoder(512, 90)
     seq_length = 32
     batch_size = 3
     input = torch.rand(batch_size, seq_length, 90)
     mu, sigma, z = encoder(input)
     out = decoder(z)
-
+    print(out)
