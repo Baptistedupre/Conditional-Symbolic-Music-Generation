@@ -27,7 +27,9 @@ class LSTM(nn.Module):
             dropout=dropout,
             bidirectional=False)
 
-    def forward(self, x):
+    def forward(self, x, state=None):
+        if state is not None:
+            return self.lstm(x, state)
         return self.lstm(x)
 
 
