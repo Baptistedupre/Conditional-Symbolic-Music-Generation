@@ -37,7 +37,7 @@ class MusicVAE(nn.Module):
             mu, sigma, z = self.encoder(x, features)
             out = self.decoder(z, features)
             return out, mu, sigma, z
-        
+
         mu, sigma, z = self.encoder(x)
         out = self.decoder(z)
 
@@ -52,4 +52,3 @@ if __name__ == '__main__':
     features = torch.rand(16, 13)
     out, mu, sigma, z = model(input, features)
     print(ELBO_Loss(input, mu, sigma, out))
-
