@@ -5,24 +5,24 @@ from layers import Linear, LSTM, BiLSTM
 
 
 class Encoder(nn.Module):
-    def __init__(self, input_size, latent_dim, 
+    def __init__(self, input_size, latent_dim,
                  features_size=13,
                  hidden_size=2048,
                  num_layers=2):
         super(Encoder, self).__init__()
 
-        self.bilstm_layer = BiLSTM(input_size + features_size, hidden_size, num_layers) # noqa 501
-        self.fc_mu = Linear(hidden_size * 2, latent_dim)
-        self.fc_sigma = Linear(hidden_size * 2, latent_dim)
+        self.bilstm_layer = BiLSTM(input_size, hidden_size, num_layers) # noqa 501
+        self.fc_mu = Linear(hidden_size * 2 + features_size, latent_dim)
+        self.fc_sigma = Linear(hidden_size * 2 + features_size, latent_dim)
         self.relu = nn.ReLU()
 
     def forward(self, x, features=None):
-        if features is not None:
-            features = features.unsqueeze(1).repeat(1, x.size(1), 1)
-            x = torch.cat([x, features], dim=-1)
 
         x, _ = self.bilstm_layer(x)
         x = x[:, -1, :]
+
+        if features is not None:
+            x = torch.cat([x, features], dim=-1)
 
         mu = self.fc_mu(x)
         sigma = torch.log(torch.exp(self.fc_sigma(x)) + 1)
@@ -36,6 +36,7 @@ class Encoder(nn.Module):
 
 class CategoricalDecoder(nn.Module):
     def __init__(self, output_size, latent_dim,
+                 features_size=13,
                  projection_hidden_size=512,
                  decoder_hidden_size=1024,
                  decoder_num_layers=2,
@@ -52,7 +53,7 @@ class CategoricalDecoder(nn.Module):
         self.teacher_forcing_ratio = teacher_forcing_ratio
 
         self.projection_layer = nn.Sequential(
-            Linear(latent_dim, projection_hidden_size),
+            Linear(latent_dim + features_size, projection_hidden_size),
             nn.Tanh()
         )
 
@@ -65,10 +66,13 @@ class CategoricalDecoder(nn.Module):
             nn.Softmax(dim=-1)
         )
 
-    def forward(self, z, target=None):
+    def forward(self, z, features=None, target=None):
         batch_size = z.size(0)
+        if features is not None:
+            z = torch.cat([z, features], dim=-1)
 
         z = self.projection_layer(z)
+
         z = z.unsqueeze(1).repeat(1, self.decoder_num_layers, 1)
         prev_note, out = torch.zeros(batch_size, self.decoder_num_layers, self.output_size).to(self.device), torch.zeros(batch_size, self.segment_length, self.output_size).to(self.device) # noqa 501
         state_dec = self.init_hidden_decoder(batch_size)
@@ -195,6 +199,5 @@ if __name__ == '__main__':
     input = torch.rand(batch_size, seq_length, 90)
     features = torch.rand(batch_size, 13)
     mu, sigma, z = encoder(input, features)
-    out = decoder(z)
+    out = decoder(z, features)
     print(out)
-

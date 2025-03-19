@@ -12,8 +12,9 @@ def train(model, dataloader, optimizer, device, num_epochs):
         running_loss = 0.0
         for batch in tqdm(dataloader):
             inputs = batch[0].to(device)
+            features = batch[1].to(device)
             optimizer.zero_grad()
-            outputs, mu, sigma, _ = model(inputs)
+            outputs, mu, sigma, _ = model(inputs, features)
             loss = -ELBO_Loss(outputs, mu, sigma, inputs)
             loss.backward()
             optimizer.step()
@@ -31,8 +32,9 @@ if __name__ == '__main__':
     num_epochs = 10
 
     # Création d'un dataset aléatoire
+    features = torch.rand(num_samples, 13)
     data = torch.rand(num_samples, seq_length, input_dim)
-    dataset = TensorDataset(data)
+    dataset = TensorDataset(data, features)
     dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu") # noqa 501
