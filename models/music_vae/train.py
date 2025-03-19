@@ -1,18 +1,28 @@
+import os
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
+
 import torch
 from tqdm import tqdm
-from torch.utils.data import DataLoader, TensorDataset
-from MusicVAE.models.music_vae.model import MusicVAE
-from MusicVAE.models.music_vae.loss import ELBO_Loss
+from models.music_vae.model import MusicVAE
+from models.music_vae.loss import ELBO_Loss
+from data_processing.dataloader import MIDIDataset
 
 
-def train(model, dataloader, optimizer, device, num_epochs):
+def train(
+    model: MusicVAE,
+    dataloader: MIDIDataset,
+    optimizer: torch.optim.Adam,
+    device: str = "cuda",
+    num_epochs: int = 50,
+):
     model.to(device)
     for epoch in range(1, num_epochs + 1):
         model.train()
         running_loss = 0.0
         for batch in tqdm(dataloader):
-            inputs = batch[0].to(device)
-            features = batch[1].to(device)
+            inputs = batch['tensor'].to(device)
+            features = batch['feature'].to(device)
             optimizer.zero_grad()
             outputs, mu, sigma, _ = model(inputs, features)
             loss = -ELBO_Loss(outputs, mu, sigma, inputs)
@@ -23,22 +33,27 @@ def train(model, dataloader, optimizer, device, num_epochs):
         print(f"Epoch [{epoch}/{num_epochs}] - Loss: {average_loss:.4f}")
 
 
-if __name__ == '__main__':
-    # Exemple de dataset factice : remplacez ceci par votre DataLoader réel
-    seq_length = 32
+if __name__ == "__main__":
+    num_epochs = 50
     input_dim = 90
-    num_samples = 1000
-    batch_size = 16
-    num_epochs = 10
+    feature_type = "OneHotGenre"
+    dataset = MIDIDataset("data/songs/", feature_type=feature_type)
+    dataloader = MIDIDataset.get_dataloader(dataset, batch_size=16)
 
-    # Création d'un dataset aléatoire
-    features = torch.rand(num_samples, 13)
-    data = torch.rand(num_samples, seq_length, input_dim)
-    dataset = TensorDataset(data, features)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu") # noqa 501
-    model = MusicVAE(input_size=input_dim, output_size=input_dim, latent_dim=512, device=device) # noqa 501
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = MusicVAE(
+        input_size=input_dim, output_size=input_dim, latent_dim=512, device=device
+    )  # noqa 501
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
     train(model, dataloader, optimizer, device, num_epochs)
+    
+    # Save the trained model as a pt.tar file in the output folder.
+    import os
+    os.makedirs("output", exist_ok=True)
+    checkpoint = {
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "num_epochs": num_epochs,
+    }
+    torch.save(checkpoint, os.path.join("output", "model.pt.tar"))

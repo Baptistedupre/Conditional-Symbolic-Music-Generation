@@ -1,8 +1,12 @@
+import os
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
+
 import torch
 import torch.nn as nn
 
 from modules import Encoder, CategoricalDecoder
-from MusicVAE.models.music_vae.loss import ELBO_Loss
+from models.music_vae.loss import ELBO_Loss
 
 
 class MusicVAE(nn.Module):

@@ -15,9 +15,9 @@ from utils import songs_utils
 
 def collate_fn(batch):
     """Collate function to properly batch tensors from MIDIDataset."""
-    # Stack all tensors and features from the batch
-    tensors = torch.stack([item["tensor"] for item in batch])
-    features = torch.stack([item["feature"] for item in batch])
+    # Stack all tensors and features from the batch, converting to float32
+    tensors = torch.stack([item["tensor"].to(torch.float32) for item in batch])
+    features = torch.stack([item["feature"].to(torch.float32) for item in batch])
     paths = [item["path"] for item in batch]
 
     return {"tensor": tensors, "feature": features, "path": paths}
