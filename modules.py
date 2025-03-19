@@ -35,8 +35,10 @@ class CategoricalDecoder(nn.Module):
                  decoder_hidden_size=1024,
                  decoder_num_layers=2,
                  segment_length=32,
-                 teacher_forcing_ratio=0.5):
+                 teacher_forcing_ratio=0.5,
+                 device='cpu'):
         super(CategoricalDecoder, self).__init__()
+        self.device = device
         self.decoder_num_layers = decoder_num_layers
         self.projection_hidden_size = projection_hidden_size
         self.decoder_hidden_size = decoder_hidden_size
@@ -63,13 +65,12 @@ class CategoricalDecoder(nn.Module):
 
         z = self.projection_layer(z)
         z = z.unsqueeze(1).repeat(1, self.decoder_num_layers, 1)
-        prev_note, out, state_dec = torch.zeros(batch_size, self.decoder_num_layers, self.output_size), torch.zeros(batch_size, self.segment_length, self.output_size), self.init_hidden_decoder(batch_size) # noqa 501
-
+        prev_note, out = torch.zeros(batch_size, self.decoder_num_layers, self.output_size).to(self.device), torch.zeros(batch_size, self.segment_length, self.output_size).to(self.device) # noqa 501
+        state_dec = self.init_hidden_decoder(batch_size)
         if target is not None:
             use_teacher_forcing = self.use_teacher_forcing()
 
         if target is not None and use_teacher_forcing:
-            print(target.shape, z.shape)
             decoder_input = torch.cat([target, z], dim=-1)
             out, _ = self.decoder(decoder_input, state_dec)
             out = self.decoder_fc(out)
@@ -85,8 +86,8 @@ class CategoricalDecoder(nn.Module):
         return torch.rand(1).item() < self.teacher_forcing_ratio
 
     def init_hidden_decoder(self, batch_size):
-        return (torch.zeros(self.decoder_num_layers, batch_size, self.decoder_hidden_size), # noqa 501
-                torch.zeros(self.decoder_num_layers, batch_size, self.decoder_hidden_size)) # noqa 501
+        return (torch.zeros(self.decoder_num_layers, batch_size, self.decoder_hidden_size).to(self.device), # noqa 501
+                torch.zeros(self.decoder_num_layers, batch_size, self.decoder_hidden_size).to(self.device)) # noqa 501
 
 
 class HierarchicalDecoder(nn.Module):
