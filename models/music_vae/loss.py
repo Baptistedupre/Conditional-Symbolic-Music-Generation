@@ -9,6 +9,12 @@ def ELBO_Loss(pred, mu, sigma, target, beta=1.0):
     likelihood = -binary_cross_entropy(pred, target, reduction='sum')
 
     mu_prior, sigma_prior = torch.zeros_like(mu), torch.ones_like(sigma)
+    
+    # Ensure sigma values are strictly positive
+    epsilon = 1e-5
+    sigma = sigma.clamp_min(epsilon)
+    sigma_prior = sigma_prior.clamp_min(epsilon)
+    
     p, q = Normal(mu_prior, sigma_prior), Normal(mu, sigma)
 
     kl_div = kl_divergence(q, p)
