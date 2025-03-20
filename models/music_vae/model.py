@@ -5,7 +5,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../..'))
 import torch
 import torch.nn as nn
 
-from modules import Encoder, CategoricalDecoder
+from models.music_vae.modules import Encoder, CategoricalDecoder
 from models.music_vae.loss import ELBO_Loss
 
 

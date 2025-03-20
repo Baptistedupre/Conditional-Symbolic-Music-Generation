@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 
-from layers import Linear, LSTM, BiLSTM
+from models.music_vae.layers import Linear, LSTM, BiLSTM
 
 
 class Encoder(nn.Module):
