@@ -37,8 +37,32 @@ if __name__ == "__main__":
     num_epochs = 50
     input_dim = 90
     feature_type = "OneHotGenre"
-    dataset = MIDIDataset("data/songs/", feature_type=feature_type)
-    dataloader = MIDIDataset.get_dataloader(dataset, batch_size=16)
+    
+    if os.path.exists("data/songs/"):
+        dataset = MIDIDataset("data/songs/", feature_type=feature_type)
+        dataloader = MIDIDataset.get_dataloader(dataset, batch_size=16)
+    else:
+        print("No dataset found, creating a random one.")
+
+        from torch.utils.data import Dataset, DataLoader
+
+        class SyntheticDataset(Dataset):
+            def __init__(self, num_samples, seq_length, input_dim, num_features=13):
+                self.data = torch.rand(num_samples, seq_length, input_dim)
+                self.features = torch.rand(num_samples, num_features)
+
+            def __len__(self):
+                return len(self.data)
+
+            def __getitem__(self, idx):
+                return {"tensor": self.data[idx], "feature": self.features[idx]}
+
+        seq_length = 32
+        num_samples = 1000
+        batch_size = 16
+
+        dataset = SyntheticDataset(num_samples, seq_length, input_dim)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = MusicVAE(
