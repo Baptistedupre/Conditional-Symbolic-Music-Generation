@@ -7,6 +7,7 @@ from tqdm import tqdm
 from models.music_vae.model import MusicVAE
 from models.music_vae.loss import ELBO_Loss
 from data_processing.dataloader import MIDIDataset
+import subprocess
 
 
 def train(
@@ -15,9 +16,11 @@ def train(
     optimizer: torch.optim.Adam,
     device: str = "cuda",
     num_epochs: int = 50,
+    resume_point: int = 0
 ):
     model.to(device)
-    for epoch in range(1, num_epochs + 1):
+    for epoch in range(resume_point + 1, num_epochs + 1):
+        print(f" Starting epoch {epoch}")
         model.train()
         running_loss = 0.0
         for batch in tqdm(dataloader):
@@ -27,14 +30,14 @@ def train(
             outputs, mu, sigma, _ = model(inputs, features)
             loss = -ELBO_Loss(outputs, mu, sigma, inputs)
             loss.backward()
-            # Gradient clipping to avoid exploding gradients (max norm = 1.0)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # Gradient clipping to avoid exploding gradients (max norm = 1e5.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1e5)
             optimizer.step()
             running_loss += loss.item()
         average_loss = running_loss / len(dataloader)
         print(f"Epoch [{epoch}/{num_epochs}] - Loss: {average_loss:.4f}")
-        
-        if epoch % 5 == 0:
+
+        if epoch % 1 == 0:
             import os
             os.makedirs("output", exist_ok=True)
             checkpoint = {
@@ -43,7 +46,18 @@ def train(
                 "optimizer_state_dict": optimizer.state_dict(),
                 "average_loss": average_loss,
             }
-            torch.save(checkpoint, os.path.join("output", f"model_epoch_{epoch}.pt.tar"))
+            torch.save(checkpoint, os.path.join("output", f"model.pt"))
+            
+            command = [
+                "mc",
+                "cp",
+                "~/work/MusicVAE/output/model.pt",
+                "s3/lstepien/Conditional_Music_Generation/data/model_epoch_{epoch}.pt"
+            ]
+
+            # Execute the command.
+            subprocess.run(command, check=True)
+            print(f"Checkpoint for epoch {epoch} moved to S3 folder")
 
 
 if __name__ == "__main__":
@@ -51,15 +65,35 @@ if __name__ == "__main__":
     input_dim = 90
     feature_type = "OneHotGenre"
     dataset = MIDIDataset("data/songs/", feature_type=feature_type)
-    dataloader = MIDIDataset.get_dataloader(dataset, batch_size=16)
+    dataloader = MIDIDataset.get_dataloader(dataset, batch_size=512)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = MusicVAE(
         input_size=input_dim, output_size=input_dim, latent_dim=512, device=device
     )  # noqa 501
+    checkpoint = torch.load("output/model.pt", map_location=device)
+    state_dict=checkpoint["model_state_dict"]
+    optimizer_state_dict=checkpoint["optimizer_state_dict"]
+    starting_epoch= checkpoint["epoch"]
+    model.load_state_dict(state_dict)
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
 
-    train(model, dataloader, optimizer, device, num_epochs)
+
+    #################test
+    # command = [
+    #     "mc",
+    #     "cp",
+    #     os.path.expanduser("~/work/MusicVAE/output/model.pt"),  # expands the "~" properly
+    #     f"s3/lstepien/Conditional_Music_Generation/data/model_epoch_test.pt"
+    # ]
+
+    # # This line will run the command:
+    # subprocess.run(command, check=True)
+    # print("test checkpoint moved to S3 folder (verify)")
+
+    ###############
+
+    train(model, dataloader, optimizer, device, num_epochs, starting_epoch)
     
     # Save the trained model as a pt.tar file in the output folder.
     import os
@@ -69,4 +103,4 @@ if __name__ == "__main__":
         "optimizer_state_dict": optimizer.state_dict(),
         "num_epochs": num_epochs,
     }
-    torch.save(checkpoint, os.path.join("output", "model.pt.tar"))
+    torch.save(checkpoint, os.path.join("output", "model.pt"))
