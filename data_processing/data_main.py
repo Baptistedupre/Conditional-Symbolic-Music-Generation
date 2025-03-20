@@ -2,50 +2,44 @@ import sys
 import os
 import shutil  # For unzipping
 from pathlib import Path
-import s3fs
+import gdown  # pip install gdown
 from preprocess import save_matching_csv
 from dataloader import create_preprocessed_dataset
 
-
 def main():
-    fs = s3fs.S3FileSystem(
-        client_kwargs={"endpoint_url": "https://minio.lab.sspcloud.fr"}
-    )
+    # Google Drive URLs for the two files.
     local_matching = "data/matching.json"
-    remote_matching = "s3://lstepien/Conditional_Music_Generation/data/matching.json"
+    # Updated matching.json file ID from provided URL.
+    remote_matching_url = "https://drive.google.com/uc?id=1ouJuM2FW0XpTNelE6OD9_GMvaMI2vg2c&export=download"
     songs_path = Path("data/songs")
-    remote_songs_zip = "s3://lstepien/Conditional_Music_Generation/data/songs.zip"
-
+    # Updated songs.zip file ID from provided URL.
+    remote_songs_zip_url = "https://drive.google.com/uc?id=1kG9nEM3p2qv4rQ9AiW-4U3i5ba8qkVHF&export=download"
+    
     # Attempt to download matching.json if not present locally.
     if not Path(local_matching).exists():
-        if fs.exists(remote_matching):
-            print("Found remote matching.json. Downloading...")
-            os.makedirs("data", exist_ok=True)
-            fs.get(remote_matching, local_matching)
-        else:
-            print("Remote matching.json not found. It will be recreated locally.")
-
+        print("Found no local matching.json. Downloading from Google Drive...")
+        os.makedirs("data", exist_ok=True)
+        gdown.download(remote_matching_url, local_matching, quiet=False)
+    else:
+        print("Local matching.json found.")
+        
     # Attempt to download songs.zip if processed files are missing.
     processed_files = list(songs_path.glob("*.pt")) if songs_path.exists() else []
     if not processed_files:
-        if fs.exists(remote_songs_zip):
-            print("Found remote songs.zip. Downloading and unzipping...")
-            local_zip = "data/songs.zip"
-            os.makedirs("data", exist_ok=True)
-            fs.get(remote_songs_zip, local_zip)
-            shutil.unpack_archive(local_zip, "data/")
-            os.remove(local_zip)
-        else:
-            print(
-                "Remote songs.zip not found. Processed files will be recreated locally."
-            )
+        print("No processed song files found.")
+        print("Downloading songs.zip from Google Drive and unzipping...")
+        local_zip = "data/songs.zip"
+        os.makedirs("data", exist_ok=True)
+        gdown.download(remote_songs_zip_url, local_zip, quiet=False)
+        shutil.unpack_archive(local_zip, "data/")
+        os.remove(local_zip)
+    else:
+        print("Found processed song files locally.")
 
     # Check if both matching.json and processed songs are available.
     processed_files = list(songs_path.glob("*.pt")) if songs_path.exists() else []
     if Path(local_matching).exists() and processed_files:
-        print(
-            "Local matching.json and processed songs are available. Data is ready for MIDIDataset."
-        )
+        print("Local matching.json and processed songs are available. Data is ready for MIDIDataset.")
         return
 
     # Proceed with local preprocessing.
@@ -56,9 +50,7 @@ def main():
 
     if not Path(local_matching).exists() or Path(local_matching).stat().st_size == 0:
         print("Creating matching.json locally...")
-        save_matching_csv(
-            "data/msd_tagtraum_cd1.cls", "data/lmd_matched/lmd_matched", local_matching
-        )
+        save_matching_csv("data/msd_tagtraum_cd1.cls", "data/lmd_matched/lmd_matched", local_matching)
     else:
         print("matching.json is available.")
 
@@ -76,7 +68,6 @@ def main():
     create_preprocessed_dataset(local_matching)
     final_count = len(list(songs_path.glob("*.pt")))
     print(f"Preprocessing complete. {final_count} files processed in total.")
-
 
 # Include check_data_requirements unchanged
 def check_data_requirements():
@@ -102,7 +93,6 @@ def check_data_requirements():
     os.makedirs("data", exist_ok=True)
     requirements["output_folder"].mkdir(exist_ok=True)
     return requirements
-
 
 if __name__ == "__main__":
     main()
