@@ -55,8 +55,20 @@ class MIDIDataset(Dataset):
             filename = random.choice(self.file_list)
             file_path = os.path.join(self.data_dir, filename)
 
-            # Load the data using torch.load
-            data_dict = torch.load(file_path)
+            # Check if file exists before trying to load
+            if not os.path.exists(file_path):
+                self.file_list.remove(filename)
+                continue
+
+            # Load the data using torch.load with error handling
+            try:
+                data_dict = torch.load(file_path)
+            except Exception as e:
+                print(f"Error loading {file_path}: {e}")
+                if os.path.exists(file_path):
+                    os.remove(file_path)  # Remove file if it's corrupted
+                self.file_list.remove(filename)
+                continue
 
             # Get feature tensor based on specified type
             feature = data_dict[self.feature_type]
@@ -64,6 +76,9 @@ class MIDIDataset(Dataset):
             # Choose a random melody
             melody_keys = [k for k in data_dict.keys() if k.startswith("melody_")]
             if not melody_keys:  # Skip if no melodies
+                if os.path.exists(file_path):
+                    os.remove(file_path)  # Remove file if no melodies
+                self.file_list.remove(filename)
                 continue
 
             melody_key = random.choice(melody_keys)
@@ -71,6 +86,10 @@ class MIDIDataset(Dataset):
 
             # Check if the melody has any tensors
             if len(tensors) == 0:  # Skip if empty melody
+                # Remove melody from data_dict
+                data_dict.pop(melody_key)
+                # Save the updated data_dict
+                torch.save(data_dict, file_path)
                 continue
 
             tensor = random.choice(tensors)

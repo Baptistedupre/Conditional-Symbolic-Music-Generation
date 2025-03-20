@@ -25,7 +25,10 @@ class Encoder(nn.Module):
             x = torch.cat([x, features], dim=-1)
 
         mu = self.fc_mu(x)
-        sigma = torch.log(torch.exp(self.fc_sigma(x)) + 1)
+        raw_sigma = self.fc_sigma(x)
+        sigma = torch.log(torch.exp(raw_sigma) + 1)
+        # Clamp sigma to avoid division by zero later
+        sigma = sigma.clamp_min(1e-5)
 
         with torch.no_grad():
             epsilon = torch.randn_like(sigma)

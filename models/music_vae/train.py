@@ -27,10 +27,23 @@ def train(
             outputs, mu, sigma, _ = model(inputs, features)
             loss = -ELBO_Loss(outputs, mu, sigma, inputs)
             loss.backward()
+            # Gradient clipping to avoid exploding gradients (max norm = 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
             running_loss += loss.item()
         average_loss = running_loss / len(dataloader)
         print(f"Epoch [{epoch}/{num_epochs}] - Loss: {average_loss:.4f}")
+        
+        if epoch % 5 == 0:
+            import os
+            os.makedirs("output", exist_ok=True)
+            checkpoint = {
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "average_loss": average_loss,
+            }
+            torch.save(checkpoint, os.path.join("output", f"model_epoch_{epoch}.pt.tar"))
 
 
 if __name__ == "__main__":
