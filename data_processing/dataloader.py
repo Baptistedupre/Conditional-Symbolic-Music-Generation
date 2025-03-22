@@ -106,6 +106,17 @@ class MIDIDataset(Dataset):
 
         raise RuntimeError("Could not find valid melody after multiple attempts")
 
+    @staticmethod
+    def get_dataloader(dataset, batch_size=64, shuffle=True, num_workers=4):
+        """Creates a DataLoader for the dataset."""
+        return DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=shuffle,
+            num_workers=num_workers,
+            collate_fn=collate_fn,
+        )
+
 
 def convert_midi_to_tensors(
     midi_path: str, chunk_size: int = 2
