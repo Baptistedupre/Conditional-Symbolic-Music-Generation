@@ -46,7 +46,6 @@ def main():
         print(
             "Local matching.json and processed songs are available. Data is ready for MIDIDataset."
         )
-        return
 
     # Proceed with local preprocessing.
     print("Checking local data requirements...")
@@ -76,6 +75,46 @@ def main():
     create_preprocessed_dataset(local_matching)
     final_count = len(list(songs_path.glob("*.pt")))
     print(f"Preprocessing complete. {final_count} files processed in total.")
+
+    # Embedding dataset creation step
+    songs_emb_path = Path("data/songs_embeddings")
+    processed_emb_files = (
+        list(songs_emb_path.glob("*.pt")) if songs_emb_path.exists() else []
+    )
+    if not processed_emb_files:
+        remote_embeddings_zip = (
+            "s3://lstepien/Conditional_Music_Generation/data/songs_embeddings.zip"
+        )
+        if fs.exists(remote_embeddings_zip):
+            print("Found remote songs_embeddings.zip. Downloading and unzipping...")
+            local_zip = "data/songs_embeddings.zip"
+            fs.get(remote_embeddings_zip, local_zip)
+            shutil.unpack_archive(local_zip, "data/")
+            os.remove(local_zip)
+        elif list(songs_path.glob("*.pt")) and Path("output/model_vae.pt").exists():
+            print("Creating embeddings from processed songs...")
+            import torch
+            from models.music_vae.model import MusicVAE
+            from dataloader import create_embedding_dataset
+
+            input_dim = 90
+            device = "cuda" if torch.cuda.is_available() else "cpu"
+            model = MusicVAE(
+                input_size=input_dim,
+                output_size=input_dim,
+                latent_dim=512,
+                device=device,
+            )  # noqa 501
+            model.to(device)
+            checkpoint = torch.load("output/model_vae.pt", map_location=device)
+            state_dict = checkpoint["model_state_dict"]
+            model.load_state_dict(state_dict)
+            model.eval()
+            create_embedding_dataset("data/songs/", model, device)
+        else:
+            print("No source for creating embeddings found.")
+    else:
+        print("Processed embeddings are available.")
 
 
 # Include check_data_requirements unchanged
