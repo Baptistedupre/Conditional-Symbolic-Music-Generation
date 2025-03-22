@@ -3,30 +3,42 @@ import math
 import os
 import time
 import csv
-
+import sys
+sys.path.append(os.path.join(os.path.dirname(__file__), "../.."))
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 import numpy as np
 import matplotlib.pyplot as plt
-from tqdm import tqdm  # <--- Imported tqdm
+from tqdm import tqdm  
+from data_processing.dataloader import EmbeddingDataset
 
 # -----------------------------
 # Sub‑modules
 # -----------------------------
+class TransformerPositionalEncoding(nn.Module):
+    def __init__(self, embed_channels):
+        super().__init__()
+        self.embed_channels = embed_channels
+
+    def forward(self, positions):
+        device = positions.device
+        pos = positions.unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, self.embed_channels, 2, device=device, dtype=torch.float32) *
+                             -(math.log(10000.0) / self.embed_channels))
+        pe = torch.zeros(positions.size(0), self.embed_channels, device=device)
+        pe[:, 0::2] = torch.sin(pos * div_term)
+        pe[:, 1::2] = torch.cos(pos * div_term)
+        return pe
+
 class NoiseEncoding(nn.Module):
-    """
-    Sinusoidal noise encoding.
-    Given a noise tensor of shape (batch, 1), returns a tensor of shape (batch, channels).
-    """
     def __init__(self, channels):
         super().__init__()
         self.channels = channels
 
     def forward(self, noise):
         noise = noise.squeeze(-1)  # (batch,)
-        assert noise.dim() == 1, f"Expected noise of dim 1, got {noise.dim()}"
         half_dim = self.channels // 2
         emb_factor = math.log(10000.0) / (half_dim - 1)
         emb = torch.exp(-torch.arange(half_dim, dtype=torch.float32, device=noise.device) * emb_factor)
@@ -39,10 +51,6 @@ class NoiseEncoding(nn.Module):
         return pos_emb
 
 class DenseFiLM(nn.Module):
-    """
-    Feature‑wise linear modulation (FiLM) generator.
-    Takes a time tensor (batch,) and outputs scale and shift of shape (batch, 1, out_channels) if sequence=True.
-    """
     def __init__(self, embedding_channels, out_channels, sequence=False):
         super().__init__()
         self.embedding_channels = embedding_channels
@@ -66,9 +74,6 @@ class DenseFiLM(nn.Module):
         return scale, shift
 
 class DenseResBlock(nn.Module):
-    """
-    A simple residual block for fully‑connected layers.
-    """
     def __init__(self, features):
         super().__init__()
         self.linear = nn.Linear(features, features)
@@ -81,32 +86,10 @@ class DenseResBlock(nn.Module):
             y = y * scale + shift
         return x + y
 
-class TransformerPositionalEncoding(nn.Module):
-    """
-    Positional encoding for Transformer.
-    Given a tensor of positions with shape (seq_len,),
-    returns a tensor of shape (seq_len, embed_channels).
-    """
-    def __init__(self, embed_channels):
-        super().__init__()
-        self.embed_channels = embed_channels
-
-    def forward(self, positions):
-        device = positions.device
-        pos = positions.unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, self.embed_channels, 2, device=device, dtype=torch.float32) *
-                             -(math.log(10000.0) / self.embed_channels))
-        pe = torch.zeros(positions.size(0), self.embed_channels, device=device)
-        pe[:, 0::2] = torch.sin(pos * div_term)
-        pe[:, 1::2] = torch.cos(pos * div_term)
-        return pe
-
-# -----------------------------
-# TransformerDDPM Denoising Network
-# -----------------------------
+# Modified TransformerDDPM with Brief Condition Encoding
 class TransformerDDPM(nn.Module):
     def __init__(self, num_layers=6, num_heads=8, num_mlp_layers=2, mlp_dims=2048,
-                 data_channels=512, seq_len=32):
+                 data_channels=512, seq_len=32, feature_dim=13):
         super().__init__()
         self.num_layers = num_layers
         self.num_mlp_layers = num_mlp_layers
@@ -114,9 +97,17 @@ class TransformerDDPM(nn.Module):
         self.embed_channels = 128
         self.data_channels = data_channels
         self.seq_len = seq_len
+        self.feature_dim = feature_dim
 
+        # Input projection for the song parts.
         self.input_proj = nn.Linear(data_channels, self.embed_channels)
         self.pos_enc = TransformerPositionalEncoding(self.embed_channels)
+        # Brief encoder for the global condition (e.g. genre)
+        self.cond_encoder = nn.Sequential(
+            nn.Linear(feature_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, self.embed_channels)
+        )
         
         self.layernorm1 = nn.LayerNorm(self.embed_channels)
         self.self_attn = nn.MultiheadAttention(embed_dim=self.embed_channels, num_heads=num_heads, batch_first=True)
@@ -138,16 +129,23 @@ class TransformerDDPM(nn.Module):
         self.layernorm_out = nn.LayerNorm(mlp_dims)
         self.out_proj = nn.Linear(mlp_dims, data_channels)
 
-    def forward(self, inputs, t):
-        # t is expected to be of shape (batch,) or (batch,1)
+    def forward(self, inputs, t, features):
+        # inputs: [BS, seq_len, data_channels]
+        # features: [BS, feature_dim]
         batch_size, seq_len, _ = inputs.size()
         device = inputs.device
+
         positions = torch.arange(seq_len, device=device, dtype=torch.float32)
-        temb = self.pos_enc(positions)
+        temb = self.pos_enc(positions)  # [seq_len, embed_channels]
         temb = temb.unsqueeze(0).expand(batch_size, -1, -1)
+
+        # Briefly encode the condition.
+        cond_emb = self.cond_encoder(features)  # [BS, embed_channels]
+        cond_emb = cond_emb.unsqueeze(1).expand(batch_size, seq_len, self.embed_channels)
         
-        x = self.input_proj(inputs)
-        x = x + temb
+        # Process latent input and add positional and condition information.
+        x = self.input_proj(inputs)  # [BS, seq_len, embed_channels]
+        x = x + temb + cond_emb
         
         for _ in range(self.num_layers):
             shortcut = x
@@ -172,188 +170,26 @@ class TransformerDDPM(nn.Module):
         return x
 
 # -----------------------------
-# Synthetic Dataset and DataLoader
+# Synthetic Dataset (if needed)
 # -----------------------------
 class SyntheticDataset(Dataset):
-    def __init__(self, num_samples, seq_len=32, data_channels=512):
+    def __init__(self, num_samples, seq_len=32, data_channels=512, feature_dim=13):
         self.num_samples = num_samples
         self.seq_len = seq_len
         self.data_channels = data_channels
+        self.feature_dim = feature_dim
 
     def __len__(self):
         return self.num_samples
 
     def __getitem__(self, idx):
-        x = torch.randn(self.seq_len, self.data_channels, dtype=torch.float32)
+        # Create a random song split into parts and a random one-hot genre vector.
+        song = torch.randn(self.seq_len, self.data_channels, dtype=torch.float32)
+        # Here features is a one-hot vector represented as float (e.g., 13 classes).
+        genre = torch.nn.functional.one_hot(torch.randint(0, self.feature_dim, (1,)), num_classes=self.feature_dim).squeeze(0).float()
+        # Also generate a random t value.
         t = torch.rand(1, dtype=torch.float32)
-        return x, t
-
-# -----------------------------
-# Loss Functions
-# -----------------------------
-def reduce_loss(x, reduction):
-    if reduction is None or reduction == "none":
-        return x
-    elif reduction == "sum":
-        return torch.sum(x)
-    elif reduction == "mean":
-        return torch.mean(x)
-    else:
-        raise ValueError("Unsupported reduction option.")
-
-def denoising_score_matching_loss(batch, model, sigmas, continuous_noise=False, reduction="mean"):
-    # In this loss the model is trained to predict the score: -noise/sigma^2.
-    device = batch.device
-    batch_size = batch.size(0)
-    num_sigmas = len(sigmas)
-    sigmas_tensor = torch.tensor(sigmas, dtype=batch.dtype, device=device)
-
-    labels = torch.randint(low=int(continuous_noise), high=num_sigmas, size=(batch_size,), device=device)
-    if continuous_noise:
-        lower = sigmas_tensor[torch.clamp(labels - 1, min=0)]
-        upper = sigmas_tensor[labels]
-        rand_uniform = torch.rand_like(lower)
-        used_sigmas = lower + rand_uniform * (upper - lower)
-    else:
-        used_sigmas = sigmas_tensor[labels]
-
-    extra_dims = [1] * (batch.dim() - 1)
-    used_sigmas = used_sigmas.view(batch_size, *extra_dims)
-
-    noise = torch.randn_like(batch) * used_sigmas
-    perturbed_samples = batch + noise
-
-    target = -1.0 / (used_sigmas ** 2) * noise
-
-    scores = model(perturbed_samples, used_sigmas.view(batch_size))
-    
-    scores_flat = scores.view(batch_size, -1)
-    target_flat = target.view(batch_size, -1)
-    
-    loss_per_sample = 0.5 * torch.sum((scores_flat - target_flat)**2, dim=-1) * (used_sigmas.squeeze()**2)
-    return reduce_loss(loss_per_sample, reduction)
-
-def ddpm_loss(batch, model, sigmas, continuous_noise=False, reduction="mean"):
-    # In ddpm loss the model is trained to predict the noise added.
-    device = batch.device
-    batch_size = batch.size(0)
-    num_sigmas = len(sigmas)
-    sigmas_tensor = torch.tensor(sigmas, dtype=batch.dtype, device=device)
-
-    labels = torch.randint(low=int(continuous_noise), high=num_sigmas, size=(batch_size,), device=device)
-    if continuous_noise:
-        lower = sigmas_tensor[torch.clamp(labels - 1, min=0)]
-        upper = sigmas_tensor[labels]
-        rand_uniform = torch.rand_like(lower)
-        used_sigmas = lower + rand_uniform * (upper - lower)
-    else:
-        used_sigmas = sigmas_tensor[labels]
-
-    extra_dims = [1] * (batch.dim() - 1)
-    used_sigmas = used_sigmas.view(batch_size, *extra_dims)
-
-    noise = torch.randn_like(batch) * used_sigmas
-    perturbed_samples = batch + noise
-
-    # For ddpm loss, we aim to predict the original noise.
-    target = noise
-    prediction = model(perturbed_samples, used_sigmas.view(batch_size))
-    
-    prediction_flat = prediction.view(batch_size, -1)
-    target_flat = target.view(batch_size, -1)
-    
-    loss_per_sample = nn.functional.mse_loss(prediction_flat, target_flat, reduction='none').mean(dim=-1)
-    return reduce_loss(loss_per_sample, reduction)
-
-def combined_loss(batch, model, sigmas, continuous_noise=False, reduction="mean"):
-    # If using both losses, weight them equally; in this case the target is the original noise.
-    return 0.5 * denoising_score_matching_loss(batch, model, sigmas, continuous_noise, reduction) + \
-           0.5 * ddpm_loss(batch, model, sigmas, continuous_noise, reduction)
-
-# -----------------------------
-# Sampling Functions
-# -----------------------------
-def sample_dsm(model, sigmas, device, num_samples=16, sample_shape=(32,512)):
-    """
-    Sampling when the model is trained with dsm loss.
-    Note: In dsm loss, the network approximates the score: -noise/sigma^2.
-    To get a noise estimate, compute: - sigma^2 * score.
-    Then update: x = x - sigma * estimated_noise.
-    """
-    model.eval()
-    with torch.no_grad():
-        x = torch.randn(num_samples, *sample_shape, device=device)
-        # Iterate through the full 1000-step schedule (or whatever is in sigmas)
-        for sigma in tqdm(reversed(sigmas)):
-            sigma_tensor = torch.full((num_samples,), sigma, device=device)
-            predicted_score = model(x, sigma_tensor)
-            estimated_noise = - (sigma ** 2) * predicted_score
-            x = x - sigma * estimated_noise
-        return x
-
-def sample_ddpm(model, sigmas, device, num_samples=16, sample_shape=(32,512)):
-    """
-    Sampling when the model is trained with ddpm loss.
-    Here the model predicts the noise directly.
-    """
-    model.eval()
-    with torch.no_grad():
-        x = torch.randn(num_samples, *sample_shape, device=device)
-        # Iterate through the full 1000-step schedule (or whatever is in sigmas)
-        for sigma in tqdm(reversed(sigmas)):
-            sigma_tensor = torch.full((num_samples,), sigma, device=device)
-            predicted_noise = model(x, sigma_tensor)
-            x = x - sigma * predicted_noise
-        return x
-
-def sample_fn(model, sigmas, device, loss_type, num_samples=16, sample_shape=(32,512)):
-    """
-    Wrapper sampling function:
-    - For 'dsm', use sample_dsm.
-    - For 'ddpm' and 'both', use ddpm sampling.
-    """
-    if loss_type == "dsm":
-        return sample_dsm(model, sigmas, device, num_samples, sample_shape)
-    else:
-        return sample_ddpm(model, sigmas, device, num_samples, sample_shape)
-
-# -----------------------------
-# Checkpoint Save/Load Functions
-# -----------------------------
-def save_checkpoint(model, optimizer, epoch, loss, checkpoint_dir="checkpoints"):
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch{epoch}.pt")
-    torch.save({
-        "epoch": epoch,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "loss": loss,
-    }, checkpoint_path)
-    print(f"Checkpoint saved: {checkpoint_path}")
-
-# -----------------------------
-# Logging and Plotting Functions
-# -----------------------------
-def log_epoch_loss(epoch, loss, log_file="output/training_log.csv"):
-    os.makedirs("output", exist_ok=True)
-    file_exists = os.path.isfile(log_file)
-    with open(log_file, "a", newline="") as csvfile:
-        writer = csv.writer(csvfile)
-        if not file_exists:
-            writer.writerow(["epoch", "loss"])
-        writer.writerow([epoch, loss])
-
-def plot_losses(epoch_losses, fname="output/training_loss.png"):
-    os.makedirs("output", exist_ok=True)
-    epochs = list(range(1, len(epoch_losses) + 1))
-    plt.figure()
-    plt.plot(epochs, epoch_losses, marker='o')
-    plt.xlabel('Epoch')
-    plt.ylabel('Loss')
-    plt.title('Training Loss')
-    plt.grid(True)
-    plt.savefig(fname)
-    plt.close()
+        return {"tensor": song, "feature": genre, "t": t}
 
 # -----------------------------
 # Training Loop
@@ -363,69 +199,120 @@ def train_loop(model, optimizer, dataloader, sigmas, loss_type, continuous_noise
     epoch_losses = []
     for epoch in range(1, num_epochs + 1):
         batch_losses = []
-        # Variables to accumulate losses if loss type is "both"
-        epoch_dsm_loss = 0.0
-        epoch_ddpm_loss = 0.0
-        num_batches = 0
-
+        print(f"\nEpoch {epoch}/{num_epochs}")
         model.train()
-        # Wrap the dataloader with tqdm for a progress bar.
-        for x, t in tqdm(dataloader, desc=f"Epoch {epoch}/{num_epochs}"):
-            x = x.to(device)
+
+        for batch in tqdm(dataloader, desc=f"Epoch {epoch}"):
             optimizer.zero_grad()
-            if loss_type == "dsm":
-                loss = denoising_score_matching_loss(x, model, sigmas, continuous_noise, reduction="mean")
-            elif loss_type == "ddpm":
-                loss = ddpm_loss(x, model, sigmas, continuous_noise, reduction="mean")
-            elif loss_type == "both":
-                dsm_val = denoising_score_matching_loss(x, model, sigmas, continuous_noise, reduction="mean")
-                ddpm_val = ddpm_loss(x, model, sigmas, continuous_noise, reduction="mean")
-                loss = 0.5 * dsm_val + 0.5 * ddpm_val
-                epoch_dsm_loss += dsm_val.item()
-                epoch_ddpm_loss += ddpm_val.item()
+            # Extract items from the dictionary batch.
+            inputs = batch["tensor"].to(device)    # [BS, seq_len, data_channels]
+            cond = batch["feature"].to(device)       # [BS, feature_dim]
+            bs = inputs.size(0)
+
+            # Sample noise scale from our schedule.
+            sigmas_tensor = torch.tensor(sigmas, dtype=inputs.dtype, device=device)
+            labels = torch.randint(low=0, high=len(sigmas), size=(bs,), device=device)
+            used_sigmas = sigmas_tensor[labels]
+            used_sigmas_expanded = used_sigmas.view(bs, *([1] * (inputs.dim() - 1)))
+
+            # Add noise to inputs.
+            noise = torch.randn_like(inputs) * used_sigmas_expanded
+            perturbed = inputs + noise
+            # For DDPM loss: target is the original noise.
+            # For DSM loss: target is -noise/(sigma^2)
+            if loss_type == "ddpm":
+                target = noise
             else:
-                raise ValueError("Unknown loss type")
+                target = - noise / (used_sigmas_expanded ** 2)
+
+            # Use used_sigmas as t.
+            t_used = used_sigmas.view(bs, 1)
+            # Forward pass.
+            output = model(perturbed, t_used, cond)
+            # Compute loss.
+            output_flat = output.view(bs, -1)
+            target_flat = target.view(bs, -1)
+            if loss_type == "ddpm":
+                loss = F.mse_loss(output_flat, target_flat, reduction='mean')
+            else:
+                loss = F.l1_loss(output_flat, target_flat, reduction='mean')
+
             loss.backward()
             optimizer.step()
             batch_losses.append(loss.item())
-            num_batches += 1
 
         avg_loss = np.mean(batch_losses)
         epoch_losses.append(avg_loss)
-        # If using both, print the separate and combined losses for the epoch.
-        if loss_type == "both":
-            avg_dsm = epoch_dsm_loss / num_batches
-            avg_ddpm = epoch_ddpm_loss / num_batches
-            print(f"Epoch {epoch}/{num_epochs} - DSM Loss: {avg_dsm:.6f}, DDPM Loss: {avg_ddpm:.6f}, Combined Loss: {avg_loss:.6f}")
-        else:
-            print(f"Epoch {epoch}/{num_epochs} - Avg Loss: {avg_loss:.6f}")
-        save_checkpoint(model, optimizer, epoch, avg_loss)
+        print(f"Epoch {epoch} Loss: {avg_loss:.6f}")
+        # Save checkpoint and log loss.
+        os.makedirs("checkpoints", exist_ok=True)
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "loss": avg_loss,
+        }, os.path.join("checkpoints", f"checkpoint_epoch{epoch}.pt"))
         if avg_loss < best_loss:
             best_loss = avg_loss
-            save_checkpoint(model, optimizer, "best", best_loss)
-        log_epoch_loss(epoch, avg_loss)
-        plot_losses(epoch_losses)
+            torch.save({
+                "epoch": epoch,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "loss": avg_loss,
+            }, os.path.join("checkpoints", f"checkpoint_epoch_best.pt"))
+        # Plot losses.
+        os.makedirs("output", exist_ok=True)
+        epochs = list(range(1, len(epoch_losses) + 1))
+        plt.figure()
+        plt.plot(epochs, epoch_losses, marker='o')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.title('Training Loss')
+        plt.grid(True)
+        plt.savefig(os.path.join("output", "training_loss.png"))
+        plt.close()
         time.sleep(0.1)
     return model
+
+# -----------------------------
+# Sampling Functions
+# -----------------------------
+def sample_ddpm(model, sigmas, device, cond, num_samples=16, sample_shape=(32, 525)):
+    """
+    Sampling using DDPM loss.
+    cond: tensor of shape [num_samples, feature_dim] 
+    """
+    model.eval()
+    with torch.no_grad():
+        x = torch.randn(num_samples, *sample_shape, device=device)
+        for sigma in tqdm(reversed(sigmas), desc="Sampling"):
+            sigma_tensor = torch.full((num_samples, 1), sigma, device=device)
+            x = x - sigma * model(x, sigma_tensor, cond)
+        return x
+
+def sample_fn(model, sigmas, device, loss_type, cond, num_samples=16, sample_shape=(32, 525)):
+    if loss_type == "dsm":
+        return sample_ddpm(model, sigmas, device, cond, num_samples, sample_shape)
+    else:
+        return sample_ddpm(model, sigmas, device, cond, num_samples, sample_shape)
 
 # -----------------------------
 # Main Function
 # -----------------------------
 def main():
-    import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--loss_type", type=str, default="dsm", choices=["dsm", "ddpm", "both"],
+    parser.add_argument("--loss_type", type=str, default="ddpm", choices=["dsm", "ddpm", "both"],
                         help="Select which loss to use.")
     parser.add_argument("--continuous_noise", action="store_true", help="Use continuous noise conditioning.")
     args = parser.parse_args()
 
-    # Instantiation of dataset, model, hyperparameters (outside the train loop)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 16
+    batch_size = 512
     num_epochs = 5
-    num_samples = 50000  # total synthetic samples
+    num_samples = 50000
     seq_len = 32
-    data_channels = 525
+    data_channels = 512  # Updated channels if needed.
+    feature_dim = 13
     lr = 1e-3
 
     sigma_begin = 1.0
@@ -437,21 +324,27 @@ def main():
     num_sampling_steps = 1000
     sampling_sigmas = np.geomspace(sigma_begin, sigma_end, num=num_sampling_steps).tolist()
 
-    dataset = SyntheticDataset(num_samples, seq_len=seq_len, data_channels=data_channels)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
+    if os.path.exists("data/songs_embeddings/"):
+        print("Loading dataset from data/songs_embeddings/")
+        dataset = EmbeddingDataset("data/songs_embeddings/", feature_type="OneHotGenre")
+        dataloader = EmbeddingDataset.get_dataloader(dataset, batch_size=batch_size)
+    else:
+        print("No dataset found, creating a random synthetic dataset.")
+        dataset = SyntheticDataset(num_samples, seq_len=seq_len, data_channels=data_channels, feature_dim=feature_dim)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True)
 
     model = TransformerDDPM(num_layers=6, num_heads=8, num_mlp_layers=2,
-                              mlp_dims=2048, data_channels=data_channels, seq_len=seq_len)
+                              mlp_dims=2048, data_channels=data_channels, seq_len=seq_len, feature_dim=feature_dim)
     model = model.to(device)
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
 
-    # Use training_sigmas (15 steps) for training.
     trained_model = train_loop(model, optimizer, dataloader, training_sigmas,
                                args.loss_type, args.continuous_noise, num_epochs, device)
 
-    # Use sampling_sigmas (1000 steps) for iterative refinement during sampling.
+    # For sampling we need a condition for each sample; for example, use the same fixed condition.
+    sample_condition = torch.zeros(16, feature_dim, device=device)  # Adjust as needed.
     num_sampled = 16
-    samples = sample_fn(trained_model, sampling_sigmas, device, args.loss_type,
+    samples = sample_fn(trained_model, sampling_sigmas, device, args.loss_type, sample_condition,
                          num_samples=num_sampled, sample_shape=(seq_len, data_channels))
     print("Sampling complete. Samples shape:", samples.shape)
 
