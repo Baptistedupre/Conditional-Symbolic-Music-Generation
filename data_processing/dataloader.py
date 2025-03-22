@@ -11,6 +11,9 @@ import random
 
 from utils.melody_converter import melody_2bar_converter
 from utils import songs_utils
+import warnings
+# Suppress the specific FutureWarning from torch.load
+warnings.filterwarnings("ignore", category=FutureWarning, module="torch.serialization")
 
 
 def collate_fn(batch):
@@ -49,12 +52,13 @@ class MIDIDataset(Dataset):
         )  # Arbitrary multiplier to allow multiple samples per file
 
     def __getitem__(self, _):  # idx is ignored as we're sampling randomly
-        max_attempts = 5  # Prevent infinite loops
+        max_attempts = 100  # Prevent infinite loops
         for attempt in range(max_attempts):
             # Choose a random file
             filename = random.choice(self.file_list)
             file_path = os.path.join(self.data_dir, filename)
 
+            # Load the data using torch.load with error handling
             # Check if file exists before trying to load
             if not os.path.exists(file_path):
                 self.file_list.remove(filename)
@@ -62,7 +66,7 @@ class MIDIDataset(Dataset):
 
             # Load the data using torch.load with error handling
             try:
-                data_dict = torch.load(file_path)
+                data_dict = torch.load(file_path,weights_only=True)
             except Exception as e:
                 print(f"Error loading {file_path}: {e}")
                 if os.path.exists(file_path):
@@ -77,8 +81,9 @@ class MIDIDataset(Dataset):
             melody_keys = [k for k in data_dict.keys() if k.startswith("melody_")]
             if not melody_keys:  # Skip if no melodies
                 if os.path.exists(file_path):
-                    os.remove(file_path)  # Remove file if no melodies
+                    os.remove(file_path) # Remove file if no melodies
                 self.file_list.remove(filename)
+                print(f"Removed empty file. {filename}")
                 continue
 
             melody_key = random.choice(melody_keys)
@@ -89,7 +94,7 @@ class MIDIDataset(Dataset):
                 # Remove melody from data_dict
                 data_dict.pop(melody_key)
                 # Save the updated data_dict
-                torch.save(data_dict, file_path)
+                torch.save(data_dict, file_path, _use_new_zipfile_serialization=True)
                 continue
 
             tensor = random.choice(tensors)
