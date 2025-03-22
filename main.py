@@ -7,6 +7,7 @@ import torch.nn.functional as F
 import argparse
 from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
+import os
 
 # Import VAE and its loss
 from models.music_vae.model import MusicVAE
@@ -33,6 +34,7 @@ parser.add_argument("--timesteps_diff", type=int, default=1000, help="Number of 
 parser.add_argument("--checkpoint_interval", type=float, default=0.2, help="Fraction of total epochs after which a checkpoint is saved")
 parser.add_argument("--train_from_cp_vae", action="store_true", help="Continue VAE training from checkpoint")
 parser.add_argument("--train_from_cp_diffusion", action="store_true", help="Continue diffusion training from checkpoint")
+parser.add_argument("--ssp", action="store_true", help="Move checkpoints to S3 using MinIO")
 args = parser.parse_args()
 
 # -----------------------------
@@ -56,47 +58,65 @@ class SyntheticDataset(Dataset):
 # -----------------------------
 # VAE Training Routine (with periodic checkpointing)
 # -----------------------------
-def train_vae(model, dataloader, optimizer, device, num_epochs=50, checkpoint_interval=0.2):
+def optimizer_to(optimizer, device):
+    """
+    Moves optimizer state tensors to the given device.
+    """
+    for param in optimizer.state.values():
+        # Each state is a dict, and might include tensors such as momentum buffers.
+        for key, value in param.items():
+            if isinstance(value, torch.Tensor):
+                param[key] = value.to(device)
+
+
+def train(
+    model: MusicVAE,
+    dataloader: MIDIDataset,
+    optimizer: torch.optim.Adam,
+    device: str = "cuda",
+    num_epochs: int = 50,
+    resume_point: int = 0,
+    ssp: bool = False,
+):
     model.to(device)
-    best_loss = float('inf')
-    best_state = None
-    # Calculate number of epochs between checkpoints
-    interval = max(1, int(num_epochs * checkpoint_interval))
-    
-    for epoch in range(1, num_epochs + 1):
+    for epoch in range(resume_point + 1, num_epochs + 1):
+        print(f" Starting epoch {epoch}")
         model.train()
         running_loss = 0.0
-        for batch in tqdm(dataloader, desc=f"VAE Epoch {epoch}"):
-            inputs = batch['tensor'].to(device)
-            features = batch['feature'].to(device)
+        for batch in tqdm(dataloader):
+            inputs = batch["tensor"].to(device)
+            features = batch["feature"].to(device)
             optimizer.zero_grad()
             outputs, mu, sigma, _ = model(inputs, features)
             loss = -ELBO_Loss(outputs, mu, sigma, inputs)
             loss.backward()
+            # Gradient clipping to avoid exploding gradients (max norm = 1e5.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1e5)
             optimizer.step()
             running_loss += loss.item()
         average_loss = running_loss / len(dataloader)
-        print(f"[VAE] Epoch [{epoch}/{num_epochs}] - Loss: {average_loss:.4f}")
-        
-        # Save best checkpoint if improvement observed.
-        if average_loss < best_loss:
-            best_loss = average_loss
-            best_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
-            torch.save({
-                "model_state_dict": best_state,
-                "best_loss": best_loss,
+        print(f"Epoch [{epoch}/{num_epochs}] - Loss: {average_loss:.4f}")
+
+        if epoch % 1 == 0:
+            os.makedirs("output", exist_ok=True)
+            checkpoint = {
                 "epoch": epoch,
-            }, os.path.join("output", f"vae_model_checkpoint_best.pt.tar"))
-        
-        # Save final checkpoint every interval and at the final epoch.
-        if epoch % interval == 0 or epoch == num_epochs:
-            torch.save({
                 "model_state_dict": model.state_dict(),
-                "epoch": epoch,
-                "loss": average_loss,
-            }, os.path.join("output", f"vae_model_checkpoint_final.pt.tar"))
-            
-    return model, best_state, best_loss
+                "optimizer_state_dict": optimizer.state_dict(),
+                "average_loss": average_loss,
+            }
+            torch.save(checkpoint, os.path.join("output", "model.pt"))
+            if ssp:
+                command = [
+                    "mc",
+                    "cp",
+                    os.path.expanduser("~/work/MusicVAE/output/model.pt"),
+                    f"s3/lstepien/Conditional_Music_Generation/data/model_epoch_{epoch}.pt",
+                ]
+
+                # Execute the command.
+                subprocess.run(command, check=True)
+                print(f"Checkpoint for epoch {epoch} moved to S3 folder")
 
 # -----------------------------
 # Setup Diffusion Hyperparameters
@@ -193,12 +213,14 @@ if __name__ == "__main__":
 
     # Dataset setup
     if os.path.exists("data/songs/"):
+        print("Loading dataset...")
         dataset = MIDIDataset("data/songs/", feature_type=feature_type)
+        dataloader = MIDIDataset.get_dataloader(dataset, batch_size=16)
     else:
         print("No dataset found, using synthetic dataset.")
         num_samples = 1000
         dataset = SyntheticDataset(num_samples, seq_length, input_dim)
-    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     os.makedirs("output", exist_ok=True)
 
@@ -218,10 +240,14 @@ if __name__ == "__main__":
             print("No VAE checkpoint found; starting from scratch.")
 
     print("Training VAE...")
-    vae_model, best_state_vae, best_loss_vae = train_vae(
-        vae_model, dataloader, optimizer_vae, device, 
-        num_epochs=num_epochs_vae, 
-        checkpoint_interval=args.checkpoint_interval)
+    vae_model, best_state_vae, best_loss_vae = train(
+        vae_model, 
+        dataloader, 
+        optimizer_vae, 
+        device, 
+        num_epochs_vae, 
+        ssp=args
+    )
         
     
     
