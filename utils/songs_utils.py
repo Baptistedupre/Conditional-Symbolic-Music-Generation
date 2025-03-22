@@ -14,6 +14,7 @@
 
 import note_seq
 import numpy as np
+import torch
 from .melody_converter import melody_2bar_converter
 
 
@@ -76,38 +77,44 @@ def extract_melodies_raw(note_sequence, keep_longest_split=False):
 
 
 # TODO: come back to it when the MusicVAE works
-def chunks_to_embeddings(sequences, model, data_converter):
-    """Convert NoteSequence objects into latent space embeddings.
+def chunks_to_embeddings(
+    tensors_sequence, feature, model, seq_length=32, latent_dims=512
+):
+    """Convert a sequence of tensors into latent space embeddings by batching.
 
     Args:
-      sequences: A list of NoteSequence objects.
+      tensors_sequence: A list of tensors.
+      feature: Conditioning of the latent space.
       model: A trained MusicVAE object used for inference.
-      data_converter: A data converter used to convert NoteSequence objects into
-          tensor encodings for model inference.
+      seq_length: Maximum number of bars (or chunks) to process.
+      latent_dims: Dimensionality of the latent space.
 
     Returns:
-      A numpy matrix of shape [len(sequences), latent_dims].
+      Tensor of shape [seq_length, latent_dims]. Unused rows are zero-padded.
     """
     assert model is not None, "No model provided."
 
-    latent_dims = model._z_input.shape[1]
-    idx = []
-    non_rest_chunks = []
-    zs = np.zeros((len(sequences), latent_dims))
-    mus = np.zeros((len(sequences), latent_dims))
-    sigmas = np.zeros((len(sequences), latent_dims))
-    for i, chunk in enumerate(sequences):
-        if len(data_converter.to_tensors(chunk).inputs) > 0:
-            idx.append(i)
-            non_rest_chunks.append(chunk)
-    if non_rest_chunks:
-        z, mu, sigma = model.encode(non_rest_chunks)
-        assert z.shape == mu.shape == sigma.shape
-        for i, mean in enumerate(mu):
-            zs[idx[i]] = z[i]
-            mus[idx[i]] = mean
-            sigmas[idx[i]] = sigma[i]
-    return zs, mus, sigmas
+    # Determine batch size from available tensors (up to seq_length)
+    batch_size = min(seq_length, len(tensors_sequence))
+    # Stack the first batch_size tensors to create a single batch.
+    batch = torch.stack(tensors_sequence[:batch_size], dim=0)
+    feature_batch = feature.unsqueeze(0).repeat(batch_size, 1)
+
+    # Process the batch with the encoder.
+    # Assume model.encoder can handle batched inputs.
+    # The encoder is expected to return outputs where 'z' has the latent embeddings.
+    _, _, z = model.encoder(batch, feature_batch)
+
+    # Depending on your encoder's return shape, z might be shaped like [batch_size, 1, latent_dims]
+    # If so, squeeze out the extra dimension.
+    if z.dim() == 3 and z.size(1) == 1:
+        z = z.squeeze(1)  # Now shape: [batch_size, latent_dims]
+
+    # Initialize an embeddings tensor with zeros (to pad if batch_size < seq_length)
+    embeddings = torch.zeros(seq_length, latent_dims, device=z.device)
+    embeddings[:batch_size] = z
+
+    return embeddings
 
 
 # TODO: come back to it when the MusicVAE works
