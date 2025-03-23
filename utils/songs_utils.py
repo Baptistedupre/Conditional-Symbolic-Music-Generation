@@ -18,6 +18,16 @@ import torch
 from .melody_converter import melody_2bar_converter
 
 
+def one_hot_along_dim1(probs):
+    # Create an all-zeros tensor of the same shape.
+    one_hot = torch.zeros_like(probs, dtype=torch.long)
+    # Compute the index of the maximum value for each row.
+    indices = probs.argmax(dim=1).unsqueeze(1)  # shape: [A, 1]
+    # Use scatter to set 1's along dimension 1 at the max indices.
+    one_hot.scatter_(1, indices, 1)
+    return one_hot
+
+
 def count_measures(note_sequence):
     """Approximate number of measures in the song."""
     splits = note_seq.sequences_lib.split_note_sequence_on_time_changes(note_sequence)
@@ -76,7 +86,6 @@ def extract_melodies_raw(note_sequence, keep_longest_split=False):
     return melodies
 
 
-# TODO: come back to it when the MusicVAE works
 def chunks_to_embeddings(
     tensors_sequence, feature, model, seq_length=32, latent_dims=512
 ):
@@ -117,35 +126,42 @@ def chunks_to_embeddings(
     return embeddings
 
 
-# TODO: come back to it when the MusicVAE works
-def embeddings_to_chunks(embeddings, model, temperature=1e-3):
-    """Decode latent embeddings as NoteSequences.
+def embeddings_to_song(embeddings, feature, model):
+    """Decode latent embeddings as a Song object.
 
     Args:
-      embeddings: A numpy array of latent embeddings.
-      model: A MusicVAE object used for decoding embeddings.
+      embeddings: A tensor of shape [32, 512] representing 32 chunks (2-bar encodings).
+      feature: Conditioning of the latent space.
+      model: A MusicVAE object used for decoding. Expected to have methods `decode` and `tensor_to_note_sequence`.
 
     Returns:
-      A list of NoteSequence objects.
+      A Song object built from the decoded NoteSequences, and a partition tensor.
     """
     assert model is not None, "No model provided."
-    assert len(embeddings) > 0
-
-    reconstructed_chunks = model.decode(
-        embeddings, temperature=temperature, length=model._config.hparams.max_seq_len
+    decoded_tensors = []
+    for i in range(embeddings.size(0)):
+        # Decode embedding; expected output shape: [1, 32, 90]
+        decoded_tensor = (
+            model.decoder(embeddings[i].unsqueeze(0), feature.unsqueeze(0))
+            .squeeze(0)
+            .detach()
+        )
+        decoded_tensor_one_hot = one_hot_along_dim1(decoded_tensor)
+        decoded_tensors.append(decoded_tensor_one_hot.cpu().numpy())
+    chunks = melody_2bar_converter.from_tensors(decoded_tensors)
+    fix_instruments_for_concatenation(chunks)
+    concat_chunks = note_seq.sequences_lib.concatenate_sequences(chunks)
+    partition = np.concatenate(decoded_tensors, axis=0).T
+    return (
+        Song(
+            concat_chunks,
+            melody_2bar_converter,
+            chunk_length=2,
+            multitrack=False,
+            reconstructed=True,
+        ),
+        partition,
     )
-    assert len(reconstructed_chunks) == len(embeddings)
-
-    embedding_norms = np.linalg.norm(embeddings, axis=1)
-    rest_chunk_idx = np.where(embedding_norms == 0)[
-        0
-    ]  # rests correspond to zero-length embeddings
-
-    for idx in rest_chunk_idx:
-        rest_ns = note_seq.NoteSequence()
-        rest_ns.total_time = reconstructed_chunks[idx].total_time
-        reconstructed_chunks[idx] = rest_ns
-    return reconstructed_chunks
 
 
 class Song(object):
