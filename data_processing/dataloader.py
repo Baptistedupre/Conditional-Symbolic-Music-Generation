@@ -216,15 +216,7 @@ class EmbeddingDataset(Dataset):
             filename = random.choice(self.file_list)
             file_path = os.path.join(self.data_dir, filename)
 
-            # Load the data using torch.load with error handling
-            try:
-                data_dict = torch.load(file_path, weights_only=True)
-            except Exception as e:
-                print(f"Error loading {file_path}: {e}")
-                if os.path.exists(file_path):
-                    os.remove(file_path)  # Remove file if it's corrupted
-                self.file_list.remove(filename)
-                continue
+            data_dict = torch.load(file_path, weights_only=True)
 
             # Get feature tensor based on specified type
             feature = data_dict[self.feature_type]
@@ -243,6 +235,10 @@ class EmbeddingDataset(Dataset):
 
             # Check if the melody has any tensors
             if tensor.size(0) != 32:  # Skip if empty melody
+                # wait 1 second
+                import time
+
+                time.sleep(1)
                 # Remove melody from data_dict
                 data_dict.pop(melody_key)
                 # Save the updated data_dict
@@ -283,7 +279,7 @@ def embed_melodies(
     os.makedirs(save_dir, exist_ok=True)
 
     # Choose a random melody
-    melody_keys = [k for k in data_dict.keys() if k.startswith("melody_")]
+    melody_keys = [k for k in data_dict.keys() if k.startswith("melody")]
     if not melody_keys:  # Skip if no melodies
         if os.path.exists(song_path):
             os.remove(song_path)  # Remove file if no melodies
@@ -293,26 +289,52 @@ def embed_melodies(
     # TODO : add feature_type to model to know what features to use given the model
     feature = data_dict["OneHotGenre"].to(torch.float32).to(device)
     data_dict.pop("Features")
-
+    old_len_data_dict = len(data_dict)
+    counter = 0
     for melody_key in melody_keys:
         tensors = data_dict[melody_key]
         tensors = [t.to(torch.float32).to(device) for t in tensors]
 
         # Check if the melody has any tensors
         if len(tensors) == 0:
+            # Remove melody from data_dict
+            data_dict.pop(melody_key)
+            counter += 1
             continue
 
         embeddings = songs_utils.chunks_to_embeddings(tensors, feature, model)
+        if torch.sum(embeddings) == 0:
+            print(f" !!! Embeddings are all zeros for {song_path}!!!!!")
+
         if device == "cpu":
             embeddings = embeddings.to(torch.float8_e4m3fn).detach()
         else:
             embeddings = embeddings.to(torch.float8_e4m3fn).detach().cpu()
         data_dict[melody_key] = embeddings
 
+    new_len_data_dict = len(data_dict)
+    if new_len_data_dict == 0 and old_len_data_dict > 0:
+        print(
+            f" red flag, there are melodies but all scrapped, check if they were all empty ?"
+        )
+        print(f" number of melodies scrapped due to empty tensor: {counter}")
+
+    # check there are no empty melodies
+    for melody_key in data_dict.keys():
+        if data_dict[melody_key].size(0) == 0:
+            print(f" red flag, there are empty melodies in the data_dict")
+            print(f" melody_key: {melody_key}")
+            print(f" data_dict[melody_key].size(0): {data_dict[melody_key].size(0)}")
+            print(f" song_path: {song_path}")
+            print(f" data_dict: {data_dict}")
+            print(f" THIS IS file {song_path} with empty melody {melody_key}")
+            print(f"--------------------------------")
+
     # Clean filename by removing .mid extension before adding .pt
     song_name = os.path.basename(song_path)
     save_path = os.path.join(save_dir, song_name)
     torch.save(data_dict, save_path, _use_new_zipfile_serialization=True)
+
     return True
 
 
