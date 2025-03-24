@@ -68,60 +68,31 @@ def get_matched_midi(midi_folder, genre_df):
     return df.drop(["TrackID"], axis=1)
 
 
-def normalize_features(features):
-    """
-    Normalizes the features to the range [-1, 1].
+def get_features(midi_path):
+    # Load MIDI file
+    pm = pretty_midi.PrettyMIDI(midi_path)
 
-    Parameters
-    ----------
-    features : list of float
-        The array of features.
+    # Tempo and beat related features
+    beats = pm.get_beats()
+    beat_density = len(beats) / (pm.get_end_time() if pm.get_end_time() > 0 else 1)
 
-    Returns
-    -------
-    list of float
-        Normalized features.
-    """
-    tempo = (features[0] - 150) / 300
-    num_sig_changes = (features[1] - 2) / 10
-    resolution = (features[2] - 260) / 400
-    time_sig_1 = (features[3] - 3) / 8
-    time_sig_2 = (features[4] - 3) / 8
-    return [tempo, num_sig_changes, resolution, time_sig_1, time_sig_2]
+    # Note statistics across all instruments
+    all_notes = []
+    for instrument in pm.instruments:
+        all_notes.extend(instrument.notes)
 
+    if all_notes:
+        pitches = np.array([n.pitch for n in all_notes])
+        durations = np.array([n.end - n.start for n in all_notes])
+        pitch_mean = float(np.mean(pitches))
+        pitch_var = float(np.var(pitches))
+        dur_mean = float(np.mean(durations))
+        dur_var = float(np.var(durations))
+    else:
+        pitch_mean = pitch_var = dur_mean = dur_var = 0.0
 
-def get_features(path):
-    """
-    Extracts the features from a MIDI file given its path.
-
-    Parameters
-    ----------
-    path : str
-        The path to the MIDI file.
-
-    Returns
-    -------
-    list of float
-        The extracted features.
-    """
-    try:
-        # Test for Corrupted MIDI Files
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            file = pretty_midi.PrettyMIDI(path)
-
-            tempo = file.estimate_tempo()
-            num_sig_changes = len(file.time_signature_changes)
-            resolution = file.resolution
-            ts_changes = file.time_signature_changes
-            ts_1 = 4
-            ts_2 = 4
-            if len(ts_changes) > 0:
-                ts_1 = ts_changes[0].numerator
-                ts_2 = ts_changes[0].denominator
-            return normalize_features([tempo, num_sig_changes, resolution, ts_1, ts_2])
-    except:
-        return None
+    # Return features as a list in a fixed order
+    return [beat_density, pitch_mean, pitch_var, dur_mean, dur_var]
 
 
 def one_hot(labels, num_classes):

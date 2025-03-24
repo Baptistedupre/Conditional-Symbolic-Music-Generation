@@ -277,24 +277,25 @@ def train_loop(model, optimizer, dataloader, sigmas, loss_type, continuous_noise
 # -----------------------------
 # Sampling Functions
 # -----------------------------
-def sample_ddpm(model, sigmas, device, cond, num_samples=16, sample_shape=(32, 525)):
+def sample_ddpm(model, sigmas, device, cond, num_samples=16, sample_shape=(32, 525), seed=0):
     """
     Sampling using DDPM loss.
     cond: tensor of shape [num_samples, feature_dim] 
     """
     model.eval()
     with torch.no_grad():
+        torch.manual_seed(seed)
         x = torch.randn(num_samples, *sample_shape, device=device)
         for sigma in tqdm(reversed(sigmas), desc="Sampling"):
             sigma_tensor = torch.full((num_samples, 1), sigma, device=device)
             x = x - sigma * model(x, sigma_tensor, cond)
         return x
 
-def sample_fn(model, sigmas, device, loss_type, cond, num_samples=16, sample_shape=(32, 525)):
+def sample_fn(model, sigmas, device, loss_type, cond, num_samples=16, sample_shape=(32, 525), seed=0):
     if loss_type == "dsm":
-        return sample_ddpm(model, sigmas, device, cond, num_samples, sample_shape)
+        return sample_ddpm(model, sigmas, device, cond, num_samples, sample_shape, seed)
     else:
-        return sample_ddpm(model, sigmas, device, cond, num_samples, sample_shape)
+        return sample_ddpm(model, sigmas, device, cond, num_samples, sample_shape, seed)
 
 # -----------------------------
 # Main Function
