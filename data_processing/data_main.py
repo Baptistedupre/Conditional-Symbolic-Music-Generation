@@ -6,6 +6,7 @@ import gdown  # pip install gdown
 from preprocess import save_matching_csv
 from dataloader import create_preprocessed_dataset
 
+
 def main():
     # Google Drive URLs for the two files.
     local_matching = "data/matching.json"
@@ -14,7 +15,7 @@ def main():
     songs_path = Path("data/songs")
     # Updated songs.zip file ID from provided URL.
     remote_songs_zip_url = "https://drive.google.com/uc?id=1kG9nEM3p2qv4rQ9AiW-4U3i5ba8qkVHF&export=download"
-    
+
     # Attempt to download matching.json if not present locally.
     if not Path(local_matching).exists():
         print("Found no local matching.json. Downloading from Google Drive...")
@@ -22,7 +23,7 @@ def main():
         gdown.download(remote_matching_url, local_matching, quiet=False)
     else:
         print("Local matching.json found.")
-        
+
     # Attempt to download songs.zip if processed files are missing.
     processed_files = list(songs_path.glob("*.pt")) if songs_path.exists() else []
     if not processed_files:
@@ -39,7 +40,9 @@ def main():
     # Check if both matching.json and processed songs are available.
     processed_files = list(songs_path.glob("*.pt")) if songs_path.exists() else []
     if Path(local_matching).exists() and processed_files:
-        print("Local matching.json and processed songs are available. Data is ready for MIDIDataset.")
+        print(
+            "Local matching.json and processed songs are available. Data is ready for MIDIDataset."
+        )
         return
 
     # Proceed with local preprocessing.
@@ -50,7 +53,9 @@ def main():
 
     if not Path(local_matching).exists() or Path(local_matching).stat().st_size == 0:
         print("Creating matching.json locally...")
-        save_matching_csv("data/msd_tagtraum_cd1.cls", "data/lmd_matched/lmd_matched", local_matching)
+        save_matching_csv(
+            "data/msd_tagtraum_cd1.cls", "data/lmd_matched/lmd_matched", local_matching
+        )
     else:
         print("matching.json is available.")
 
@@ -75,39 +80,34 @@ def main():
         list(songs_emb_path.glob("*.pt")) if songs_emb_path.exists() else []
     )
     if not processed_emb_files:
-        remote_embeddings_zip = (
-            "s3://lstepien/Conditional_Music_Generation/data/songs_embeddings.zip"
-        )
-        if fs.exists(remote_embeddings_zip):
-            print("Found remote songs_embeddings.zip. Downloading and unzipping...")
-            local_zip = "data/songs_embeddings.zip"
-            fs.get(remote_embeddings_zip, local_zip)
-            shutil.unpack_archive(local_zip, "data/")
-            os.remove(local_zip)
-        elif list(songs_path.glob("*.pt")) and Path("output/model_vae.pt").exists():
-            print("Creating embeddings from processed songs...")
-            import torch
-            from models.music_vae.model import MusicVAE
-            from dataloader import create_embedding_dataset
+        # Updated: use new songs_embeddings.zip link from Google Drive.
+        embeddings_zip_url = "https://drive.google.com/uc?id=10u-eb3TeBOn0H0TGOc7hJC5DUg8NwWX4&export=download"
+        print("Downloading songs_embeddings.zip from Google Drive...")
+        gdown.download(embeddings_zip_url, "data/songs_embeddings.zip", quiet=False)
+        shutil.unpack_archive("data/songs_embeddings.zip", "data/")
+        os.remove("data/songs_embeddings.zip")
+    elif list(songs_path.glob("*.pt")) and Path("output/model_vae.pt").exists():
+        print("Creating embeddings from processed songs...")
+        import torch
+        from models.music_vae.model import MusicVAE
+        from dataloader import create_embedding_dataset
 
-            input_dim = 90
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            model = MusicVAE(
-                input_size=input_dim,
-                output_size=input_dim,
-                latent_dim=512,
-                device=device,
-            )  # noqa 501
-            model.to(device)
-            checkpoint = torch.load("output/model_vae.pt", map_location=device)
-            state_dict = checkpoint["model_state_dict"]
-            model.load_state_dict(state_dict)
-            model.eval()
-            create_embedding_dataset("data/songs/", model, device)
-        else:
-            print("No source for creating embeddings found.")
+        input_dim = 90
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = MusicVAE(
+            input_size=input_dim,
+            output_size=input_dim,
+            latent_dim=512,
+            device=device,
+        )  # noqa 501
+        model.to(device)
+        checkpoint = torch.load("output/model_vae.pt", map_location=device)
+        state_dict = checkpoint["model_state_dict"]
+        model.load_state_dict(state_dict)
+        model.eval()
+        create_embedding_dataset("data/songs/", model, device)
     else:
-        print("Processed embeddings are available.")
+        print("No source for creating embeddings found.")
 
 
 # Include check_data_requirements unchanged
@@ -134,6 +134,7 @@ def check_data_requirements():
     os.makedirs("data", exist_ok=True)
     requirements["output_folder"].mkdir(exist_ok=True)
     return requirements
+
 
 if __name__ == "__main__":
     main()

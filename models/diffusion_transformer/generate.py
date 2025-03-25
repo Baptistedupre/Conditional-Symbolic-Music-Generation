@@ -11,7 +11,7 @@ from tqdm import tqdm
 
 # Import the VAE and denoiser components
 from models.music_vae.model import MusicVAE
-from MusicVAE.models.diffusion_transformer.denoiser import DenoiseNN, sample
+from models.diffusion_transformer.denoiser import DenoiseNN, sample
 # --- Preprocessing helpers (from preprocess.py) ---
 def get_genres(path):
     ids = []

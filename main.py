@@ -1,6 +1,7 @@
 import os
 import sys
 import math
+import subprocess
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -15,7 +16,7 @@ from models.music_vae.loss import ELBO_Loss
 from data_processing.dataloader import MIDIDataset
 
 # Import denoiser components
-from MusicVAE.models.diffusion_transformer.denoiser import p_losses, DenoiseNN, extract
+from models.diffusion_transformer.denoiser import p_losses, DenoiseNN, extract
 
 # -----------------------------
 # Command-line Argument Parser
