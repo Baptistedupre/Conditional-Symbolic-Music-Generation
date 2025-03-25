@@ -9,7 +9,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
 from data_processing import preprocess
 from math import erf, sqrt
 
-from models.music_vae.denoiser_transformer import sample_fn
+from MusicVAE.models.diffusion_transformer.denoiser_transformer import sample_fn
 from utils.songs_utils import embeddings_to_song
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score

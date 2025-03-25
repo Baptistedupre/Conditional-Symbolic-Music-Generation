@@ -15,7 +15,7 @@ from models.music_vae.loss import ELBO_Loss
 from data_processing.dataloader import MIDIDataset
 
 # Import denoiser components
-from models.music_vae.denoiser import p_losses, DenoiseNN, extract
+from MusicVAE.models.diffusion_transformer.denoiser import p_losses, DenoiseNN, extract
 
 # -----------------------------
 # Command-line Argument Parser

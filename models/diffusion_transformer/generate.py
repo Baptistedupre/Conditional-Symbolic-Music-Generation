@@ -11,8 +11,7 @@ from tqdm import tqdm
 
 # Import the VAE and denoiser components
 from models.music_vae.model import MusicVAE
-from models.music_vae.denoiser import DenoiseNN, sample, prepare_diffusion_schedule
-
+from MusicVAE.models.diffusion_transformer.denoiser import DenoiseNN, sample
 # --- Preprocessing helpers (from preprocess.py) ---
 def get_genres(path):
     ids = []
@@ -80,6 +79,17 @@ if not conditions:
 # Stack conditions for batch generation.
 # Shape: (n_prompts, num_classes)
 condition_tensor = torch.stack(conditions, dim=0)
+
+# -----------------------------
+# Setup Diffusion Hyperparameters
+# -----------------------------
+def prepare_diffusion_schedule(timesteps):
+    betas = torch.linspace(1e-4, 0.02, timesteps)
+    alphas = 1.0 - betas
+    alphas_cumprod = torch.cumprod(alphas, dim=0)
+    sqrt_alphas_cumprod = torch.sqrt(alphas_cumprod)
+    sqrt_one_minus_alphas_cumprod = torch.sqrt(1.0 - alphas_cumprod)
+    return betas, sqrt_alphas_cumprod, sqrt_one_minus_alphas_cumprod
 
 # -----------------------------
 # Load VAE and Diffusion Checkpoints
